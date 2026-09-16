@@ -286,9 +286,121 @@ A forma mais simples no Windows é utilizar:
 SIGAA-Sniper.exe
 ```
 
-O executável foi empacotado com PyInstaller e não exige uma instalação separada do Python para execução.
+O executável foi empacotado com PyInstaller e não exige uma instalação separada do Python, Node.js ou qualquer outro runtime para execução — tudo o que é necessário já está incorporado no próprio `.exe`.
 
 Mantenha a estrutura do pacote original, incluindo os arquivos e diretórios necessários à aplicação.
+
+---
+
+## 🖥️ Executando em um Windows novo (sem ambiente de desenvolvimento)
+
+Este passo a passo assume um computador Windows "limpo", sem Python nem nenhuma ferramenta de desenvolvimento instalada — por exemplo, ao copiar o projeto para o computador de outra pessoa.
+
+### 1. Onde colocar o `.exe`
+
+Copie a **pasta inteira do projeto** (não apenas o arquivo `SIGAA-Sniper.exe` sozinho) para o local desejado — Área de Trabalho, Documentos, um pendrive, etc. O programa cria as pastas `config/`, `data/` e `logs/` ao lado do `.exe` na primeira execução; qualquer pasta funciona, inclusive com espaços no nome ou em outra unidade (D:, E:, um pendrive...).
+
+Não é necessário nenhum caminho fixo como `C:\Usuarios\...` — o programa descobre sozinho onde está instalado.
+
+### 2. Como executar
+
+Dê duplo clique em `SIGAA-Sniper.exe`. Uma janela de terminal abre com o menu do programa.
+
+### 3. É preciso "Executar como administrador"?
+
+**Não.** O programa não precisa de privilégios de administrador para nenhuma de suas funções (GUI, terminal, matrícula, monitoramento, notificações). Execute com duplo clique normal.
+
+### 4. O Windows vai pedir alguma permissão?
+
+Sim, é esperado que apareça uma ou ambas as telas abaixo — isso acontece com qualquer executável novo, não é exclusivo deste projeto:
+
+* **"O Windows protegeu o computador" (SmartScreen)** — aparece porque o `.exe` é novo e não possui uma assinatura digital paga (ver seção sobre o Windows Defender, logo abaixo). Clique em **"Mais informações"** e depois em **"Executar assim mesmo"**, apenas se você confia na origem do arquivo (por exemplo, recebeu diretamente de quem gerou o `.exe`, ou baixou do repositório oficial no GitHub).
+* **Firewall do Windows perguntando sobre acesso à rede** — o programa precisa de acesso à internet para falar com o SIGAA e, opcionalmente, com o Telegram/ntfy. Marque **"Redes privadas"** e clique em **"Permitir acesso"**.
+
+Se o Windows Defender remover ou bloquear o arquivo em vez de apenas avisar, veja a seção **"Windows Defender identificou o executável como ameaça"** logo abaixo.
+
+### 5. Existe alguma configuração inicial?
+
+Sim, na primeira execução:
+
+1. Um aviso legal é exibido — leia e confirme os itens para continuar (ver seção "Aviso legal" acima).
+2. Um assistente de primeira execução ajuda a cadastrar suas credenciais do SIGAA e as disciplinas de interesse. Nenhuma dessas informações fica salva em disco a menos que você marque explicitamente para salvar (ver `docs/SEGURANCA.md`).
+
+Não é necessário instalar nada além disso, nem editar arquivos de configuração manualmente.
+
+### 6. Executando pelo Explorador de Arquivos
+
+Basta navegar até a pasta onde o projeto foi colocado e dar duplo clique em `SIGAA-Sniper.exe`, como qualquer outro programa `.exe` do Windows.
+
+### 7. Abrindo um terminal na pasta do programa (para diagnóstico)
+
+1. Na pasta do projeto, clique na barra de endereço do Explorador de Arquivos (ou clique com o botão direito num espaço vazio da pasta e escolha "Abrir no Terminal", disponível no Windows 11 e no Windows 10 atualizado).
+2. Digite `cmd` e pressione Enter na barra de endereço, se a opção acima não estiver disponível.
+3. Com o terminal aberto na pasta, digite `SIGAA-Sniper.exe` e pressione Enter para rodar o programa vendo diretamente qualquer mensagem de erro no console.
+
+### 8. Como saber se está funcionando corretamente
+
+* A janela do terminal abre e mostra o cabeçalho "SIGAA SNIPER" seguido do aviso legal ou do menu numerado `[1]` a `[6]`.
+* A opção `[5] Diagnóstico` roda uma verificação de dependências, configuração, diretórios e conectividade — se tudo aparecer certo ali, o programa está funcionando corretamente.
+* As pastas `config/`, `data/` e `logs/` aparecem ao lado do `.exe` depois da primeira execução.
+
+### 9. Problemas comuns
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| Windows Defender apagou o `.exe` sozinho | Falso positivo do antivírus (comum em executáveis PyInstaller novos e sem assinatura digital paga) | Veja a seção seguinte |
+| A janela abre e fecha instantaneamente | O programa encerrou por um erro antes de mostrar o menu | Abra pelo terminal (passo 7) para ver a mensagem de erro completa |
+| "Não é possível acessar o SIGAA" no diagnóstico | Falta de conexão com a internet, ou o site do SIGAA está fora do ar | Verifique a conexão; tente novamente mais tarde |
+| Emojis aparecem como `?` no terminal | Terminal Windows configurado com uma página de código antiga (cp1252) | Comportamento esperado e inofensivo — não afeta o funcionamento |
+| A pasta foi movida e o programa "esqueceu" as disciplinas configuradas | `config/`, `data/` ou `logs/` não foram copiadas junto com o `.exe` | Copie a pasta inteira do projeto, não apenas o `.exe` |
+
+### 10. Sem dependências adicionais
+
+Nenhuma instalação de Python, bibliotecas, runtimes (.NET, Node.js, Java, Visual C++ Redistributable adicional, etc.) é necessária para rodar `SIGAA-Sniper.exe`. Tudo o que o programa precisa para funcionar já está embutido no próprio arquivo.
+
+**Limitação conhecida:** o executável foi compilado para **Windows 64-bit**. Ele não funciona em Windows 32-bit nem em outros sistemas operacionais (Linux, macOS) — nesses casos, use a Opção 2 (código-fonte) com Python instalado.
+
+---
+
+## 🛡️ Windows Defender identificou o executável como ameaça (falso positivo)
+
+Executáveis gerados com PyInstaller — como o `SIGAA-Sniper.exe` — são um alvo frequente de **falsos positivos** de antivírus. Isso acontece porque, para funcionar sem exigir Python instalado, o `.exe` empacota o interpretador Python e as bibliotecas do programa dentro de um único arquivo e os extrai para uma pasta temporária a cada execução — um padrão que também é usado por alguns programas maliciosos, então mecanismos de heurística podem confundir os dois. Some-se a isso o fato de o arquivo ser novo e **não possuir uma assinatura digital paga** (um certificado de assinatura de código custa dinheiro e exige verificação de identidade do editor, o que está fora do escopo de um projeto educacional e gratuito).
+
+Este projeto **não usa nenhuma técnica de ofuscação, compactação por UPX ou qualquer mecanismo de evasão de antivírus** — o executável é gerado com as opções padrão e recomendadas do PyInstaller (`tools/build_exe.bat` mostra exatamente como).
+
+### O que fazer se isso acontecer
+
+1. **Verifique a origem do arquivo.** Só prossiga se você obteve o `.exe` diretamente do repositório oficial no GitHub ou de alguém em quem confia — nunca de um link ou anexo desconhecido.
+2. **Confirme que é o executável legítimo.** No repositório oficial, o arquivo `SIGAA-Sniper.exe` tem o mesmo tamanho e nome descritos neste README; se quiser mais garantia, gere o `.exe` você mesmo a partir do código-fonte com `tools/build_exe.bat` (assim você sabe exatamente o que foi empacotado).
+3. **Veja a detecção no Windows Security:** abra `Segurança do Windows` → `Proteção contra vírus e ameaças` → `Histórico de proteção`, localize a entrada referente ao `SIGAA-Sniper.exe` e veja o nome da ameaça detectada.
+4. **Se confiar no arquivo, adicione uma exclusão específica** (nunca desative o Defender por completo):
+   1. Abra `Segurança do Windows` → `Proteção contra vírus e ameaças`.
+   2. Em `Configurações de proteção contra vírus e ameaças`, clique em `Gerenciar configurações`.
+   3. Role até `Exclusões` e clique em `Adicionar ou remover exclusões`.
+   4. Clique em `Adicionar uma exclusão` → `Pasta` (ou `Arquivo`, se preferir excluir só o `.exe`).
+   5. Selecione **apenas a pasta deste projeto** (ex.: `C:\Users\SeuUsuario\Documents\SIGAA-Sniper`) — nunca uma pasta genérica como `C:\` ou `Downloads` inteira.
+   6. Confirme. O Defender para de escanear (e de remover) arquivos dentro dessa pasta específica.
+5. **Se o arquivo já tiver sido removido**, restaure-o pelo histórico de proteção (`Ações` → `Restaurar`) antes ou depois de criar a exclusão, ou copie o `.exe` novamente para a pasta.
+
+### Riscos de criar uma exclusão
+
+Uma exclusão diz ao Windows Defender para **parar de verificar** os arquivos daquela pasta. Isso significa que, se algum dia um arquivo realmente malicioso for colocado nessa mesma pasta (por exemplo, por engano, ou por outro programa), o Defender não vai detectá-lo. Por isso:
+
+* Exclua **apenas a pasta deste projeto**, nunca pastas amplas como toda a pasta de Downloads ou todo o disco `C:\`.
+* Não guarde outros arquivos dentro da pasta do projeto além dos que vieram com ele.
+* **Nunca desative completamente o Windows Defender ou o Windows Security** — isso remove toda a proteção do computador contra qualquer ameaça real, não só falsos positivos deste programa.
+
+### Como remover a exclusão depois
+
+Repita os passos 1–3 acima, mas na lista de `Exclusões` selecione a entrada da pasta do projeto e clique em `Remover`.
+
+### Ajudando a resolver isso de forma definitiva
+
+Falsos positivos como este podem ser reportados diretamente à Microsoft, que analisa o arquivo e, se confirmado como inofensivo, ajusta a detecção para todos os usuários do Windows Defender — não apenas o seu computador:
+
+**https://www.microsoft.com/pt-br/wdsi/filesubmission**
+
+Isso é opcional, mas ajuda outras pessoas que forem usar o projeto no futuro.
 
 ---
 
@@ -316,6 +428,8 @@ O `run.bat` verifica o ambiente e tenta instalar automaticamente as dependência
 SIGAA-Sniper/
 │
 ├── SIGAA-Sniper.exe
+├── SIGAA-Sniper.spec       # receita reprodutível do PyInstaller (usada pelo build_exe.bat)
+├── version_info.txt        # metadados de versão embutidos no .exe
 ├── main.py
 ├── run.bat
 ├── requirements.txt
@@ -338,10 +452,8 @@ SIGAA-Sniper/
 │   ├── SEGURANCA.md
 │   └── ...
 │
-├── tests/
-│
 └── tools/
-    └── build_exe.bat
+    └── build_exe.bat       # gera SIGAA-Sniper.exe a partir do código-fonte
 ```
 
 Os diretórios `config/`, `data/` e `logs/` podem ser criados automaticamente durante a utilização.

@@ -1,0 +1,28 @@
+# Ambiente de build isolado (gerado por tools/build_exe.bat)
+.buildenv/
+build/
+dist/
+
+# Ambientes virtuais comuns
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Dados e configuracoes locais (nunca devem ser versionados - ver docs/SEGURANCA.md)
+config/*.json
+data/*.json
+logs/*.log
+logs/debug_*.html
+!config/.gitkeep
+!data/.gitkeep
+!logs/.gitkeep
+
+# Editor / SO
+.vscode/
+.idea/
+Thumbs.db
