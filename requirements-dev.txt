@@ -1,0 +1,5 @@
+# Só para desenvolvimento/testes — o programa em si precisa apenas de requirements.txt.
+-r requirements.txt
+pytest>=8
+# Opcional: teste ponta a ponta da Interface Web num navegador real (usa o Edge/Chrome já instalado).
+# playwright>=1.40

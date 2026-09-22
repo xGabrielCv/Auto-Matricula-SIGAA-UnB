@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SIGAA Sniper</title>
+  <link rel="icon" href="/static/icone.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="pular-conteudo" href="#conteudo">Pular para o conteúdo</a>
+
+  <!-- Tela exibida enquanto o aviso legal não é aceito ou se a conexão cair -->
+  <div id="tela-bloqueio" class="tela-bloqueio" hidden>
+    <div class="cartao-simples" id="tela-bloqueio-conteudo"></div>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <aside class="barra-lateral" id="barra-lateral" aria-label="Navegação principal">
+      <div class="marca">
+        <img src="/static/icone.svg" alt="" width="34" height="34">
+        <div>
+          <strong>SIGAA Sniper</strong>
+          <span class="texto-suave" id="versao-app">—</span>
+        </div>
+      </div>
+      <nav>
+        <ul class="menu" id="menu">
+          <li><button type="button" data-tela="execucao"><span aria-hidden="true">▶️</span> Execução</button></li>
+          <li><button type="button" data-tela="dashboard"><span aria-hidden="true">📊</span> Dashboard</button></li>
+          <li><button type="button" data-tela="logs"><span aria-hidden="true">📜</span> Logs</button></li>
+          <li class="menu-separador" aria-hidden="true"></li>
+          <li><button type="button" data-tela="credenciais"><span aria-hidden="true">🔑</span> Credenciais</button></li>
+          <li><button type="button" data-tela="disciplinas"><span aria-hidden="true">📚</span> Disciplinas</button></li>
+          <li><button type="button" data-tela="notificacoes"><span aria-hidden="true">🔔</span> Notificações</button></li>
+          <li><button type="button" data-tela="avancado"><span aria-hidden="true">⚙️</span> Config. Avançadas</button></li>
+          <li class="menu-separador" aria-hidden="true"></li>
+          <li><button type="button" data-tela="diagnostico"><span aria-hidden="true">🩺</span> Diagnóstico</button></li>
+          <li><button type="button" data-tela="experimental"><span aria-hidden="true">🧪</span> Experimental</button></li>
+          <li><button type="button" data-tela="ajuda"><span aria-hidden="true">❓</span> Ajuda</button></li>
+          <li><button type="button" data-tela="sobre"><span aria-hidden="true">ℹ️</span> Sobre</button></li>
+        </ul>
+      </nav>
+      <div class="barra-lateral-rodape">
+        <button type="button" class="botao botao-fantasma botao-bloco" id="botao-tema" aria-label="Alternar tema claro/escuro">🌓 Tema</button>
+        <button type="button" class="botao botao-perigo-contorno botao-bloco" id="botao-encerrar">⏻ Encerrar</button>
+      </div>
+    </aside>
+    <div class="fundo-menu" id="fundo-menu" hidden></div>
+
+    <div class="principal">
+      <header class="topo">
+        <button type="button" class="botao botao-fantasma botao-menu" id="botao-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="barra-lateral">☰</button>
+        <h1 class="topo-titulo" id="titulo-tela">Execução</h1>
+        <div class="status-execucao" id="status-execucao" role="status" aria-live="polite">
+          <span class="ponto"></span><span class="status-texto">Parado</span>
+        </div>
+      </header>
+
+      <div id="faixas"></div>
+
+      <main id="conteudo" tabindex="-1">
+
+        <!-- ▶️ EXECUÇÃO -->
+        <section class="tela" id="tela-execucao" data-titulo="Execução" hidden>
+          <div class="grade-2">
+            <div class="cartao">
+              <h2>Modo de operação</h2>
+              <div class="opcoes-modo" role="radiogroup" aria-label="Modo de operação">
+                <label class="opcao-modo">
+                  <input type="radio" name="modo" value="monitoramento">
+                  <span class="opcao-conteudo">
+                    <strong>👀 Somente monitoramento</strong>
+                    <span>Avisa quando achar vaga, <b>nunca</b> matricula sozinho. Menor risco.</span>
+                  </span>
+                </label>
+                <label class="opcao-modo">
+                  <input type="radio" name="modo" value="matricula">
+                  <span class="opcao-conteudo">
+                    <strong>🎯 Matrícula automática</strong>
+                    <span>Tenta se matricular assim que achar vaga.</span>
+                  </span>
+                </label>
+              </div>
+              <div id="bloco-dry-run" class="bloco-destaque">
+                <label class="interruptor">
+                  <input type="checkbox" id="exec-dry-run">
+                  <span class="interruptor-trilho" aria-hidden="true"></span>
+                  <span><strong>Modo de teste (DRY RUN)</strong> — simula tudo, mas não confirma a matrícula de verdade</span>
+                </label>
+                <p class="aviso-real" id="aviso-matricula-real" hidden>⚠️ DRY RUN desligado: a matrícula será <b>confirmada de verdade</b> no SIGAA quando houver vaga.</p>
+              </div>
+
+              <h3>Agendar início <span class="texto-suave">(opcional)</span></h3>
+              <div class="campo-linha">
+                <label for="exec-agendar" class="rotulo-visivel">Data e hora</label>
+                <input type="datetime-local" id="exec-agendar" step="1">
+                <button type="button" class="botao botao-fantasma" id="exec-agendar-limpar">Limpar</button>
+              </div>
+              <p class="dica">Deixe em branco para começar imediatamente.</p>
+
+              <div class="acoes">
+                <button type="button" class="botao botao-primario botao-grande" id="botao-iniciar">▶️ Iniciar</button>
+                <button type="button" class="botao botao-secundario botao-grande" id="botao-parar" disabled>⏹️ Parar</button>
+              </div>
+              <p class="status-grande" id="exec-status">Parado.</p>
+            </div>
+
+            <div class="cartao">
+              <h2>Pronto para iniciar?</h2>
+              <ul class="checklist" id="checklist"></ul>
+              <p class="dica">O aviso legal e as validações continuam valendo: nada é iniciado sem credenciais preenchidas e ao menos uma disciplina ativa válida.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- 📊 DASHBOARD -->
+        <section class="tela" id="tela-dashboard" data-titulo="Dashboard" hidden>
+          <div class="barra-acoes">
+            <span class="selo" id="dash-saude">—</span>
+            <span class="espaco"></span>
+            <button type="button" class="botao botao-fantasma" data-ir-para="logs">📜 Ver logs</button>
+          </div>
+          <div class="grade-cards" id="dash-cards"></div>
+          <p class="alerta alerta-erro" id="dash-alerta" hidden></p>
+          <div class="cartao">
+            <h2>Workers</h2>
+            <div class="tabela-rolavel">
+              <table class="tabela" aria-describedby="dash-workers-vazio">
+                <thead><tr><th scope="col">Worker</th><th scope="col">Erros</th><th scope="col">Buscas</th><th scope="col">Última ação</th><th scope="col">Latência</th><th scope="col">Ocioso</th></tr></thead>
+                <tbody id="dash-workers"></tbody>
+              </table>
+            </div>
+            <p class="vazio" id="dash-workers-vazio">Nenhum worker ativo ainda — inicie uma execução.</p>
+          </div>
+          <div class="grade-2">
+            <div class="cartao">
+              <div class="cartao-cabecalho">
+                <h2>Eventos recentes de vagas</h2>
+                <button type="button" class="botao botao-fantasma botao-pequeno" id="dash-historico">📈 Histórico por disciplina</button>
+              </div>
+              <ul class="lista-eventos" id="dash-vagas"></ul>
+            </div>
+            <div class="cartao">
+              <h2>Erros recentes</h2>
+              <ul class="lista-eventos lista-erros" id="dash-erros"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- 📜 LOGS -->
+        <section class="tela" id="tela-logs" data-titulo="Logs" hidden>
+          <div class="cartao">
+            <div class="filtros">
+              <label>Nível <select id="log-nivel"><option>Todos</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select></label>
+              <label>Categoria <select id="log-categoria"><option>Todas</option></select></label>
+              <label>Worker <select id="log-worker"><option>Todos</option></select></label>
+              <label class="filtro-busca">Buscar texto <input type="search" id="log-busca" placeholder="ex: vaga, timeout, W3"></label>
+              <label class="interruptor interruptor-compacto"><input type="checkbox" id="log-pausar"><span class="interruptor-trilho" aria-hidden="true"></span><span>Pausar</span></label>
+            </div>
+            <div class="barra-acoes">
+              <span class="texto-suave" id="log-contagem">0 eventos</span>
+              <span class="espaco"></span>
+              <button type="button" class="botao botao-fantasma botao-pequeno" id="log-limpar">🧹 Limpar tela</button>
+              <button type="button" class="botao botao-fantasma botao-pequeno" id="log-abrir">📂 Abrir arquivo completo</button>
+              <a class="botao botao-fantasma botao-pequeno" id="log-baixar" href="#">⬇️ Baixar</a>
+            </div>
+            <div class="logs-layout">
+              <div class="tabela-rolavel logs-lista">
+                <table class="tabela tabela-selecionavel">
+                  <thead><tr><th scope="col">Hora</th><th scope="col">Worker</th><th scope="col">Categoria</th><th scope="col">Nível</th><th scope="col">Evento</th></tr></thead>
+                  <tbody id="log-linhas"></tbody>
+                </table>
+                <p class="vazio" id="log-vazio">Nenhum evento para mostrar.</p>
+              </div>
+              <div class="logs-detalhes" aria-live="polite">
+                <h2>Detalhes</h2>
+                <p id="log-detalhe-corpo" class="texto-suave">Selecione um evento para ver a explicação.</p>
+                <label class="interruptor interruptor-compacto"><input type="checkbox" id="log-tecnico"><span class="interruptor-trilho" aria-hidden="true"></span><span>Mostrar detalhes técnicos</span></label>
+                <pre id="log-detalhe-tecnico" class="bloco-codigo" hidden></pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 🔑 CREDENCIAIS -->
+        <section class="tela" id="tela-credenciais" data-titulo="Credenciais" hidden>
+          <div class="cartao cartao-estreito">
+            <div class="alerta alerta-info">
+              <strong>🔒 Privacidade e segurança</strong>
+              <p>Suas credenciais NÃO são armazenadas pelo aplicativo em nenhum arquivo. Elas ficam apenas na memória desta execução e são apagadas assim que o programa é fechado. Você precisará informá-las novamente na próxima vez que abrir o SIGAA Sniper.</p>
+            </div>
+            <form id="form-credenciais" class="formulario" autocomplete="off" novalidate>
+              <label>Matrícula / usuário do SIGAA<input name="usuario" autocomplete="off" required></label>
+              <label>Senha<input name="senha" type="password" autocomplete="new-password" id="cred-senha"></label>
+              <p class="dica" id="cred-senha-dica" hidden>Senha já informada nesta execução — deixe em branco para mantê-la.</p>
+              <label>CPF (apenas números)<input name="cpf" inputmode="numeric" autocomplete="off"></label>
+              <label>Data de nascimento (DD/MM/AAAA)<input name="nascimento" placeholder="DD/MM/AAAA" autocomplete="off"></label>
+              <div class="acoes">
+                <button type="submit" class="botao botao-primario">Salvar para esta execução</button>
+                <button type="button" class="botao botao-secundario" id="cred-limpar">Limpar campos</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <!-- 📚 DISCIPLINAS -->
+        <section class="tela" id="tela-disciplinas" data-titulo="Disciplinas" hidden>
+          <div class="cartao">
+            <div class="cartao-cabecalho">
+              <p class="texto-suave">O robô atira em todas as disciplinas ativas ao mesmo tempo.</p>
+              <button type="button" class="botao botao-primario" id="disc-adicionar">➕ Adicionar</button>
+            </div>
+            <div class="tabela-rolavel">
+              <table class="tabela">
+                <thead><tr><th scope="col">Código</th><th scope="col">Turma</th><th scope="col">Departamento</th><th scope="col">Professor</th><th scope="col">Ativa?</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
+                <tbody id="disc-linhas"></tbody>
+              </table>
+            </div>
+            <p class="vazio" id="disc-vazio">Nenhuma disciplina cadastrada ainda.</p>
+          </div>
+        </section>
+
+        <!-- 🔔 NOTIFICAÇÕES -->
+        <section class="tela" id="tela-notificacoes" data-titulo="Notificações" hidden>
+          <p class="texto-suave">Opcional — o programa funciona normalmente com tudo desligado aqui.</p>
+          <form id="form-notificacoes" class="formulario" autocomplete="off" novalidate>
+            <div class="grade-3">
+              <fieldset class="cartao">
+                <legend>Telegram</legend>
+                <label class="interruptor"><input type="checkbox" name="telegram_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Ativar notificações por Telegram</span></label>
+                <label>Bot Token<input name="telegram_token" type="password" autocomplete="off"></label>
+                <label>Chat ID<input name="telegram_chat_id" autocomplete="off"></label>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" data-ajuda="telegram">Como configurar?</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="telegram">Enviar teste</button>
+                </div>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>ntfy</legend>
+                <label class="interruptor"><input type="checkbox" name="ntfy_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Ativar notificações por ntfy</span></label>
+                <label>Tópico<input name="ntfy_topic" autocomplete="off"></label>
+                <label>Servidor<input name="ntfy_servidor" autocomplete="off" placeholder="https://ntfy.sh"></label>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" data-ajuda="ntfy">Como configurar?</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="ntfy">Enviar teste</button>
+                </div>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>Alarme sonoro local</legend>
+                <label class="interruptor"><input type="checkbox" name="alarme_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Ativar alarme ao encontrar vaga</span></label>
+                <label>Repetições<input name="alarme_repeticoes" type="number" min="1" max="20"></label>
+                <label>Duração máx. (segundos)<input name="alarme_duracao" type="number" min="1" max="120"></label>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" data-ajuda="alarme">Como funciona?</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="alarme">Testar alarme</button>
+                </div>
+              </fieldset>
+            </div>
+            <div class="grade-2">
+              <fieldset class="cartao">
+                <legend>Quais eventos notificar</legend>
+                <div id="notif-eventos" class="lista-checks"></div>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>Salvar dados de notificação neste computador</legend>
+                <p class="alerta alerta-aviso">⚠️ Por padrão, o token do Telegram e o tópico do ntfy também são só de memória (como as credenciais do SIGAA). Se marcar a opção abaixo, eles serão gravados em texto simples (não criptografado) em <code>config/notificacoes.secrets.json</code>, só para não precisar redigitar toda vez.</p>
+                <label class="caixa"><input type="checkbox" name="lembrar" id="notif-lembrar"> Salvar neste computador (arquivo não criptografado)</label>
+              </fieldset>
+            </div>
+            <div class="acoes">
+              <button type="submit" class="botao botao-primario">💾 Salvar configuração de notificações</button>
+              <button type="button" class="botao botao-secundario" data-testar="todos">🔔 Testar todos os canais habilitados</button>
+            </div>
+            <div id="notif-resultado" class="resultado-testes" aria-live="polite"></div>
+          </form>
+        </section>
+
+        <!-- ⚙️ AVANÇADO -->
+        <section class="tela" id="tela-avancado" data-titulo="Configurações Avançadas" hidden>
+          <p class="texto-suave">Só mexa aqui se souber o que está fazendo. Clique nos <b>?</b> para entender cada opção.</p>
+          <form id="form-avancado" class="formulario" novalidate>
+            <div class="grade-2">
+              <fieldset class="cartao">
+                <legend>Desempenho</legend>
+                <label><span class="rotulo-linha">Quantidade de workers <button type="button" class="ajuda-mini" data-ajuda="avancado_workers" aria-label="Ajuda: workers">?</button></span><input name="num_workers" type="number" min="1" max="100"></label>
+                <label><span class="rotulo-linha">Intervalo entre buscas (segundos) <button type="button" class="ajuda-mini" data-ajuda="avancado_intervalo" aria-label="Ajuda: intervalo">?</button></span><input name="intervalo_busca" type="number" min="0.05" max="60" step="0.05"></label>
+                <label><span class="rotulo-linha">Timeout de requisição (segundos) <button type="button" class="ajuda-mini" data-ajuda="avancado_timeout" aria-label="Ajuda: timeout">?</button></span><input name="timeout_req" type="number" min="1" max="120"></label>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>Execução</legend>
+                <label class="caixa"><input type="checkbox" name="abrir_dashboard_ao_iniciar"> Abrir dashboard automaticamente ao iniciar <button type="button" class="ajuda-mini" data-ajuda="avancado_dashboard_auto" aria-label="Ajuda: dashboard">?</button></label>
+                <label><span class="rotulo-linha">Nível de log no console <button type="button" class="ajuda-mini" data-ajuda="avancado_debug" aria-label="Ajuda: nível de log">?</button></span>
+                  <select name="nivel_log_console"><option>INFO</option><option>DEBUG</option></select></label>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>Logs (dumps de debug HTML)</legend>
+                <label>Tamanho máximo (MB, informativo)<input name="logs.tamanho_max_mb" type="number" min="1" max="500"></label>
+                <label><span class="rotulo-linha">Arquivos antigos mantidos <button type="button" class="ajuda-mini" data-ajuda="avancado_logs_qtd" aria-label="Ajuda: arquivos mantidos">?</button></span><input name="logs.arquivos_mantidos" type="number" min="0" max="50"></label>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>JSON de auditoria (log principal)</legend>
+                <label><span class="rotulo-linha">Tamanho máximo por arquivo (MB) <button type="button" class="ajuda-mini" data-ajuda="avancado_logs_tamanho" aria-label="Ajuda: tamanho do log">?</button></span><input name="json_audit.tamanho_max_mb" type="number" min="1" max="500"></label>
+                <label>Arquivos antigos mantidos<input name="json_audit.arquivos_mantidos" type="number" min="0" max="50"></label>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>🌐 Interface Web</legend>
+                <label>Endereço (host)<input name="web.host" autocomplete="off"></label>
+                <label>Porta<input name="web.porta" type="number" min="1024" max="65535"></label>
+                <label class="caixa"><input type="checkbox" name="web.abrir_navegador"> Abrir o navegador automaticamente</label>
+                <p class="dica">Mudanças valem na próxima vez que a Interface Web for aberta. Mantenha <code>127.0.0.1</code> para que só este computador tenha acesso.</p>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>Espaço em disco usado pelo programa</legend>
+                <p id="avancado-espaco">—</p>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" id="avancado-espaco-atualizar">Atualizar</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" id="avancado-limpar-dumps">Limpar dumps de debug antigos</button>
+                </div>
+              </fieldset>
+            </div>
+            <fieldset class="cartao">
+              <legend>URLs do SIGAA</legend>
+              <p class="alerta alerta-aviso">⚠️ Só altere se souber o que está fazendo. <button type="button" class="ajuda-mini" data-ajuda="avancado_urls" aria-label="Ajuda: URLs">?</button></p>
+              <div id="avancado-urls" class="formulario"></div>
+            </fieldset>
+            <div class="acoes"><button type="submit" class="botao botao-primario">💾 Salvar configurações avançadas</button></div>
+          </form>
+
+          <div class="grade-2">
+            <div class="cartao">
+              <h2>Restaurar configurações padrão</h2>
+              <p class="texto-suave">Nunca afeta credenciais (elas não ficam salvas de qualquer forma).</p>
+              <div id="avancado-secoes" class="lista-checks"></div>
+              <div class="acoes acoes-compactas">
+                <button type="button" class="botao botao-secundario" id="avancado-restaurar">↩️ Restaurar selecionadas</button>
+                <button type="button" class="botao botao-perigo-contorno" id="avancado-restaurar-tudo">↩️ Restaurar TUDO</button>
+              </div>
+            </div>
+            <div class="cartao">
+              <h2>Configurações exportáveis / backup</h2>
+              <p class="texto-suave">Exporta/importa disciplinas e preferências para levar a outro computador, ou como backup local. NUNCA inclui credenciais.</p>
+              <div class="acoes acoes-compactas">
+                <a class="botao botao-secundario" id="avancado-exportar" href="#">📤 Exportar / Backup</a>
+                <label class="botao botao-secundario" for="avancado-importar-arquivo">📥 Importar / Restaurar backup</label>
+                <input type="file" id="avancado-importar-arquivo" accept=".json,application/json" class="visualmente-oculto">
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 🩺 DIAGNÓSTICO -->
+        <section class="tela" id="tela-diagnostico" data-titulo="Diagnóstico" hidden>
+          <div class="cartao">
+            <p class="texto-suave">Não inclui credenciais nem tokens.</p>
+            <div class="acoes acoes-compactas">
+              <button type="button" class="botao botao-primario" id="diag-completo">🔍 Diagnóstico completo</button>
+              <button type="button" class="botao botao-secundario" id="diag-camadas">🌐 Testar conectividade em camadas</button>
+              <button type="button" class="botao botao-fantasma" id="diag-exportar" disabled>💾 Exportar relatório</button>
+              <button type="button" class="botao botao-fantasma" id="diag-copiar" disabled>📋 Copiar diagnóstico</button>
+            </div>
+            <ul class="lista-diagnostico" id="diag-itens"></ul>
+            <details id="diag-bruto-bloco" hidden><summary>Relatório em texto</summary><pre class="bloco-codigo" id="diag-bruto"></pre></details>
+          </div>
+        </section>
+
+        <!-- 🧪 EXPERIMENTAL -->
+        <section class="tela" id="tela-experimental" data-titulo="Experimental" hidden>
+          <div class="alerta alerta-aviso">
+            <strong>⚠️ Área experimental</strong>
+            <p>Os recursos desta seção utilizam implementações alternativas encontradas nas versões antigas do projeto. Essas implementações não fazem parte do caminho principal validado e podem apresentar incompatibilidades, comportamento diferente, dependências adicionais ou simplesmente não funcionar.</p>
+            <p>Utilize esses recursos apenas para testes e experimentação. Uma falha aqui nunca afeta o monitoramento/matrícula principal.</p>
+          </div>
+          <div id="exp-lista" class="pilha"></div>
+        </section>
+
+        <!-- ❓ AJUDA -->
+        <section class="tela" id="tela-ajuda" data-titulo="Ajuda" hidden>
+          <div class="abas" role="tablist" id="ajuda-abas"></div>
+          <article class="cartao documento" id="ajuda-conteudo" role="tabpanel"></article>
+        </section>
+
+        <!-- ℹ️ SOBRE -->
+        <section class="tela" id="tela-sobre" data-titulo="Sobre" hidden>
+          <div class="grade-2">
+            <div class="cartao">
+              <h2>Repositório oficial</h2>
+              <p>Este é um pacote distribuível do projeto. Para atualizações, correções, melhorias e versões futuras, consulte o repositório oficial no GitHub — é lá que o projeto continua evoluindo.</p>
+              <p>O projeto é open source. Sugestões de melhorias e relatos de bugs são bem-vindos, preferencialmente através do GitHub (issues/discussions).</p>
+              <p><a id="sobre-repo" href="#" target="_blank" rel="noopener noreferrer">🔗 —</a></p>
+              <p class="texto-suave">Versão <span id="sobre-versao">—</span></p>
+            </div>
+            <div class="cartao">
+              <h2>Atalho na Área de Trabalho</h2>
+              <p>Cria um atalho para abrir o programa direto da Área de Trabalho.</p>
+              <div class="acoes acoes-compactas"><button type="button" class="botao botao-secundario" id="sobre-atalho">🖥️ Criar atalho</button></div>
+              <pre class="bloco-codigo" id="sobre-guia" hidden></pre>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Diálogo genérico (confirmação / informação) -->
+  <dialog id="dialogo" class="dialogo" aria-labelledby="dialogo-titulo">
+    <form method="dialog" class="dialogo-corpo">
+      <h2 id="dialogo-titulo">—</h2>
+      <div id="dialogo-conteudo" class="dialogo-conteudo"></div>
+      <div class="acoes acoes-direita" id="dialogo-botoes"></div>
+    </form>
+  </dialog>
+
+  <!-- Formulário de disciplina -->
+  <dialog id="dialogo-disciplina" class="dialogo" aria-labelledby="disc-titulo">
+    <form id="form-disciplina" class="dialogo-corpo formulario" novalidate>
+      <h2 id="disc-titulo">Disciplina</h2>
+      <p class="alerta alerta-aviso">⚠️ O código do departamento pode mudar — o SIGAA é quem define esse número, não este programa. Se parar de funcionar, use "Como encontrar?" para verificar o valor atual.</p>
+      <label>Código da disciplina (ex: FGA0211)<input name="codigo" required autocomplete="off"></label>
+      <label>Turma (ex: 01)<input name="turma" required autocomplete="off"></label>
+      <label>Departamento (digite nome ou código para buscar)
+        <input name="departamento_busca" id="disc-depto-busca" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="disc-depto-lista" aria-expanded="false">
+      </label>
+      <ul class="sugestoes" id="disc-depto-lista" role="listbox" hidden></ul>
+      <p class="dica" id="disc-depto-selecionado">Nenhum departamento selecionado.</p>
+      <button type="button" class="botao botao-fantasma botao-pequeno alinhar-inicio" data-ajuda="departamento">Como encontrar?</button>
+      <label>Professor (opcional)<input name="professor" autocomplete="off"></label>
+      <div class="acoes acoes-direita">
+        <button type="button" class="botao botao-secundario" id="disc-cancelar">Cancelar</button>
+        <button type="submit" class="botao botao-primario">Salvar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Aviso legal -->
+  <dialog id="dialogo-aviso" class="dialogo dialogo-grande" aria-labelledby="aviso-titulo">
+    <form id="form-aviso" class="dialogo-corpo" novalidate>
+      <h2 id="aviso-titulo">⚠️ Aviso Legal</h2>
+      <p class="texto-suave">Antes de continuar, leia o aviso completo abaixo:</p>
+      <div class="aviso-texto" id="aviso-texto" tabindex="0"></div>
+      <fieldset class="aviso-confirmacoes">
+        <legend>Confirme todos os pontos para continuar</legend>
+        <div id="aviso-itens"></div>
+      </fieldset>
+      <div class="acoes acoes-entre">
+        <a id="aviso-repo" href="#" target="_blank" rel="noopener noreferrer">🔗 Repositório oficial no GitHub</a>
+        <div class="acoes acoes-compactas">
+          <button type="button" class="botao botao-secundario" id="aviso-recusar">Recusar e sair</button>
+          <button type="submit" class="botao botao-primario" id="aviso-aceitar" disabled>Aceitar e continuar</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Assistente de primeira execução -->
+  <dialog id="dialogo-assistente" class="dialogo dialogo-grande" aria-labelledby="assistente-titulo">
+    <form id="form-assistente" class="dialogo-corpo formulario" novalidate autocomplete="off">
+      <p class="passos" id="assistente-passos"></p>
+      <div id="assistente-conteudo"></div>
+      <div class="acoes acoes-entre">
+        <button type="button" class="botao botao-fantasma" id="assistente-pular">Pular assistente</button>
+        <div class="acoes acoes-compactas">
+          <button type="button" class="botao botao-secundario" id="assistente-voltar">◀ Voltar</button>
+          <button type="submit" class="botao botao-primario" id="assistente-proximo">Próximo ▶</button>
+        </div>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="notificacoes-toast" id="toasts" role="status" aria-live="polite"></div>
+</body>
+</html>

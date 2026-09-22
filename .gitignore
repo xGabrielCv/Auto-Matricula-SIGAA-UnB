@@ -1,0 +1,55 @@
+# Ambiente de build isolado (gerado por tools/build_exe.bat)
+.buildenv/
+build/
+dist/
+
+# Ambientes virtuais comuns
+venv/
+.venv/
+env/
+
+# Python / testes
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Dados e configuracoes locais (nunca devem ser versionados - ver docs/SEGURANCA.md)
+config/*.json
+config/*.tmp
+data/*.json
+data/*.json.*
+data/*.tmp
+logs/*.log
+logs/*.log.*
+logs/debug_*.html
+!config/.gitkeep
+!data/.gitkeep
+!logs/.gitkeep
+
+# Segredos e credenciais (nunca, em lugar nenhum do repositorio)
+*.secrets.json
+.env
+.env.*
+*.pem
+*.key
+cookies*.txt
+
+# Temporarios / artefatos locais de teste
+*.log
+*.tmp
+*.temp
+*.bak
+screenshots/
+test-results/
+playwright-report/
+
+# Editor / SO
+.vscode/
+.idea/
+.claude/
+Thumbs.db
+Desktop.ini
+.DS_Store
