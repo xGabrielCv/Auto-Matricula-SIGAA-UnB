@@ -31,7 +31,19 @@ def _checar_dependencias_essenciais() -> list:
     return faltando
 
 
+def _saida_tolerante() -> None:
+    """Saída redirecionada numa codificação sem emoji (ex: cp1252) não pode derrubar
+    o menu: o caractere impossível vira um escape em vez de erro."""
+    for fluxo in (sys.stdout, sys.stderr):
+        try:
+            if (getattr(fluxo, "encoding", "") or "").lower().replace("-", "") != "utf8":
+                fluxo.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _saida_tolerante()
     faltando = _checar_dependencias_essenciais()
     if faltando:
         print("=" * 50)

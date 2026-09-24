@@ -40,6 +40,15 @@ if errorlevel 1 (
 )
 
 echo.
+echo Gerando version_info.txt a partir de app\versao.py ...
+".buildenv\Scripts\python.exe" tools\gerar_version_info.py
+if errorlevel 1 (
+    echo [ERRO] Falha ao gerar version_info.txt.
+    pause
+    exit /b 1
+)
+
+echo.
 echo Gerando o executavel a partir de SIGAA-Sniper.spec ...
 ".buildenv\Scripts\pyinstaller.exe" SIGAA-Sniper.spec --clean --noconfirm --distpath "." --workpath "build"
 if errorlevel 1 (
@@ -50,6 +59,12 @@ if errorlevel 1 (
 
 timeout /t 1 /nobreak >nul
 rmdir /s /q "build" >nul 2>nul
+
+echo.
+echo Gerando SHA256SUMS.txt (impressao digital do executavel) ...
+".buildenv\Scripts\python.exe" tools\gerar_hashes.py SIGAA-Sniper.exe
+echo Gerando SIGAA-Sniper.zip (pacote de distribuicao) ...
+".buildenv\Scripts\python.exe" tools\gerar_zip.py
 
 echo.
 echo ============================================================

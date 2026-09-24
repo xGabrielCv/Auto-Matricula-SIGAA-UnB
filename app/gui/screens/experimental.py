@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from app.experimental import Experimento, listar_experimentos
+from app.gui.tema import cor
 
 
 class TelaExperimental(ttk.Frame):
@@ -52,15 +53,15 @@ class TelaExperimental(ttk.Frame):
 
         info = ttk.Frame(card)
         info.pack(fill="x", pady=(8, 0))
-        ttk.Label(info, text=f"Origem: {exp.origem}", foreground="#666").pack(anchor="w")
+        ttk.Label(info, text=f"Origem: {exp.origem}", foreground=cor("#666")).pack(anchor="w")
 
         disponivel = exp.disponivel()
-        cor_status = "#1a7f37" if disponivel else "#9a6700"
+        cor_status = cor("#1a7f37") if disponivel else cor("#9a6700")
         ttk.Label(info, text=f"Status: {exp.status}", foreground=cor_status).pack(anchor="w")
 
         deps_txt = ", ".join(exp.dependencias) if exp.dependencias else "nenhuma (usa o que o programa principal já tem)"
-        ttk.Label(info, text=f"Dependências: {deps_txt}", foreground="#666").pack(anchor="w")
-        ttk.Label(info, text=f"Riscos/limitações: {exp.riscos}", foreground="#666", wraplength=600, justify="left").pack(anchor="w")
+        ttk.Label(info, text=f"Dependências: {deps_txt}", foreground=cor("#666")).pack(anchor="w")
+        ttk.Label(info, text=f"Riscos/limitações: {exp.riscos}", foreground=cor("#666"), wraplength=600, justify="left").pack(anchor="w")
 
         botoes = ttk.Frame(card)
         botoes.pack(fill="x", pady=(8, 0))
@@ -69,7 +70,7 @@ class TelaExperimental(ttk.Frame):
             ttk.Button(botoes, text="⏹️ Parar", command=exp.parar).pack(side="left", padx=(6, 0))
         ttk.Button(botoes, text="📖 Ver guia", command=lambda: self._ver_guia(exp)).pack(side="left", padx=(6, 0))
 
-        resultado = tk.Text(card, height=4, wrap="word", state="disabled", background="#f6f8fa")
+        resultado = tk.Text(card, height=4, wrap="word", state="disabled", background=cor("#f6f8fa"))
         resultado.pack(fill="x", pady=(8, 0))
         exp._widget_resultado = resultado  # anexado dinamicamente só para esta tela
 

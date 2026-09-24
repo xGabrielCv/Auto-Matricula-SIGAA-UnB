@@ -12,9 +12,11 @@ departamento").
 """
 from __future__ import annotations
 
+import json
+import os
 import unicodedata
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 # (código, nome da unidade) — ordenado como aparece na página pública do SIGAA
 DEPARTAMENTOS_REFERENCIA: List[Tuple[int, str]] = [
@@ -238,8 +240,95 @@ class Departamento:
     nome: str
 
 
+# Fase 6 (046): lista atualizada a partir da página pública do SIGAA (sem login),
+# guardada em config/departamentos.json. A lista acima continua como reserva.
+URL_LISTA_PUBLICA = "https://sigaa.unb.br/sigaa/public/turmas/listar.jsf"
+ARQUIVO_CACHE = "departamentos.json"
+MINIMO_ESPERADO = 5
+
+
+def _caminho_cache() -> str:
+    from app.utils.paths import pasta_config
+    return os.path.join(pasta_config(), ARQUIVO_CACHE)
+
+
+def _lista_efetiva() -> List[Tuple[int, str]]:
+    try:
+        with open(_caminho_cache(), encoding="utf-8") as f:
+            dados = json.load(f)
+        lista = [(int(c), str(n)) for c, n in dados.get("departamentos", [])]
+        if len(lista) >= MINIMO_ESPERADO:
+            return lista
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return DEPARTAMENTOS_REFERENCIA
+
+
+def info_lista() -> Dict[str, Any]:
+    """De onde vem a lista usada agora (para mostrar ao usuário)."""
+    try:
+        with open(_caminho_cache(), encoding="utf-8") as f:
+            dados = json.load(f)
+        if len(dados.get("departamentos", [])) >= MINIMO_ESPERADO:
+            return {"fonte": "sigaa", "atualizado_em": dados.get("atualizado_em"), "quantidade": len(dados["departamentos"]),
+                    "texto": f"Lista atualizada do SIGAA em {dados.get('atualizado_em')} ({len(dados['departamentos'])} unidades)."}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return {"fonte": "embutida", "atualizado_em": None, "quantidade": len(DEPARTAMENTOS_REFERENCIA),
+            "texto": f"Lista embutida no programa ({len(DEPARTAMENTOS_REFERENCIA)} unidades) — pode estar desatualizada."}
+
+
+def extrair_departamentos(html: str) -> List[Tuple[int, str]]:
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "html.parser")
+    campo = soup.find("select", attrs={"name": "formTurma:inputDepto"}) or soup.find("select", id="formTurma:inputDepto")
+    if campo is None:
+        return []
+    lista = []
+    for opcao in campo.find_all("option"):
+        valor = str(opcao.get("value") or "").strip()
+        nome = " ".join(opcao.get_text().split())
+        if valor.isdigit() and int(valor) > 0 and nome:
+            lista.append((int(valor), nome))
+    return lista
+
+
+def atualizar_departamentos(cliente: Any = None) -> Dict[str, Any]:
+    """Uma requisição GET à página pública (sem login). Só substitui a lista se
+    a página trouxe uma lista plausível; senão lança ValueError e nada muda."""
+    import httpx
+    from datetime import datetime
+    proprio = cliente is None
+    cliente = cliente or httpx.Client(timeout=15, follow_redirects=True,
+                                      headers={"User-Agent": "Mozilla/5.0 (SIGAA Sniper - lista de departamentos)"})
+    try:
+        resp = cliente.get(URL_LISTA_PUBLICA)
+    except httpx.HTTPError as e:
+        raise ValueError(f"Não foi possível acessar a página pública do SIGAA ({type(e).__name__}).")
+    finally:
+        if proprio:
+            cliente.close()
+    if resp.status_code != 200:
+        raise ValueError(f"A página pública do SIGAA respondeu HTTP {resp.status_code}.")
+    lista = extrair_departamentos(resp.text)
+    if len(lista) < MINIMO_ESPERADO:
+        raise ValueError("A página do SIGAA não trouxe a lista de departamentos esperada — a lista atual foi mantida.")
+    antes = {c for c, _ in _lista_efetiva()}
+    depois = {c for c, _ in lista}
+    agora = datetime.now().strftime("%d/%m/%Y %H:%M")
+    caminho = _caminho_cache()
+    tmp = caminho + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"atualizado_em": agora, "fonte": URL_LISTA_PUBLICA, "departamentos": [[c, n] for c, n in lista]},
+                  f, ensure_ascii=False, indent=2)
+    os.replace(tmp, caminho)
+    from app.core import auditoria
+    auditoria.registrar("departamentos_atualizados", quantidade=len(lista))
+    return {"quantidade": len(lista), "novos": len(depois - antes), "removidos": len(antes - depois), "atualizado_em": agora}
+
+
 def listar_departamentos() -> List[Departamento]:
-    return [Departamento(c, n) for c, n in DEPARTAMENTOS_REFERENCIA]
+    return [Departamento(c, n) for c, n in _lista_efetiva()]
 
 
 def _normalizar(texto: str) -> str:
@@ -265,11 +354,11 @@ def buscar_departamentos(termo: str) -> List[Departamento]:
 
 
 def nome_do_departamento(codigo: int) -> str:
-    for c, n in DEPARTAMENTOS_REFERENCIA:
+    for c, n in _lista_efetiva():
         if c == codigo:
             return n
     return ""
 
 
 def codigo_conhecido(codigo: int) -> bool:
-    return any(c == codigo for c, _ in DEPARTAMENTOS_REFERENCIA)
+    return any(c == codigo for c, _ in _lista_efetiva())

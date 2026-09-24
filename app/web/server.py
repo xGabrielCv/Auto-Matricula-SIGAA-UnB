@@ -45,6 +45,7 @@ ARQUIVOS_ESTATICOS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
     "/static/app.js": ("app.js", "application/javascript; charset=utf-8"),
+    "/static/graficos.js": ("graficos.js", "application/javascript; charset=utf-8"),
     "/static/icone.svg": ("icone.svg", "image/svg+xml"),
 }
 
@@ -82,6 +83,22 @@ class _Rota:
         self.exige_aviso = exige_aviso
 
 
+def _janela(valor: str) -> Optional[int]:
+    """Janela dos gráficos em segundos (vazio/0 = execução inteira), limitada a 24 h."""
+    try:
+        return min(max(int(valor), 0), 86400) or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _janela_dias(q) -> Optional[int]:
+    """Filtro de período do histórico em dias (vazio/0 = tudo), limitado a 10 anos."""
+    try:
+        return min(max(int(q.get("dias", ["0"])[0] or 0), 0), 3650) or None
+    except (TypeError, ValueError):
+        return None
+
+
 def _montar_rotas(e: EstadoWeb):
     def corpo(f):  # adapta funções que recebem só o corpo JSON
         return lambda _m, _q, dados: f(dados)
@@ -91,6 +108,7 @@ def _montar_rotas(e: EstadoWeb):
 
     return [
         _Rota("GET", r"/api/estado", sem_args(e.estado), exige_aviso=False),
+        _Rota("POST", r"/api/atividade", corpo(e.registrar_atividade), exige_aviso=False),
         _Rota("GET", r"/api/aviso-legal", sem_args(e.aviso_legal), exige_aviso=False),
         _Rota("POST", r"/api/aviso-legal/aceitar", corpo(e.aceitar_aviso), exige_aviso=False),
         _Rota("POST", r"/api/aviso-legal/recusar", sem_args(e.recusar_aviso), exige_aviso=False),
@@ -101,17 +119,36 @@ def _montar_rotas(e: EstadoWeb):
 
         _Rota("GET", r"/api/disciplinas", sem_args(e.listar_disciplinas)),
         _Rota("POST", r"/api/disciplinas", corpo(e.adicionar_disciplina)),
+        _Rota("POST", r"/api/disciplinas/lote/previa", corpo(e.previa_lote)),
+        _Rota("POST", r"/api/disciplinas/lote/aplicar", corpo(e.aplicar_lote)),
         _Rota("POST", r"/api/disciplinas/(\d+)/editar", lambda m, _q, d: e.editar_disciplina(int(m.group(1)), d)),
         _Rota("POST", r"/api/disciplinas/(\d+)/remover", lambda m, _q, d: e.remover_disciplina(int(m.group(1)), d)),
         _Rota("POST", r"/api/disciplinas/(\d+)/alternar", lambda m, _q, d: e.alternar_disciplina(int(m.group(1)), d)),
-        _Rota("GET", r"/api/departamentos", lambda _m, q, _d: e.buscar_departamentos(q.get("q", [""])[0])),
+        _Rota("GET", r"/api/departamentos", lambda _m, q, _d: e.buscar_departamentos(q.get("q", [""])[0], q.get("todos", [""])[0] == "1")),
+        _Rota("POST", r"/api/departamentos/atualizar", sem_args(e.atualizar_departamentos)),
+        _Rota("GET", r"/api/perfis", sem_args(e.perfis)),
+        _Rota("POST", r"/api/perfis", corpo(e.salvar_perfil)),
+        _Rota("POST", r"/api/perfis/aplicar", corpo(e.aplicar_perfil)),
+        _Rota("POST", r"/api/perfis/apagar", corpo(e.apagar_perfil)),
+        _Rota("GET", r"/api/config/versoes", sem_args(e.versoes_config)),
+        _Rota("POST", r"/api/config/versoes/restaurar", corpo(e.restaurar_versao)),
+        _Rota("GET", r"/api/auditoria", sem_args(e.auditoria)),
+        _Rota("GET", r"/api/historico/janelas", lambda _m, q, _d: e.janelas_provaveis(_janela_dias(q), q.get("disciplina", [""])[0])),
+        _Rota("POST", r"/api/execucao/janela", corpo(e.aplicar_janela)),
 
         _Rota("GET", r"/api/execucao", sem_args(e.status_execucao)),
         _Rota("POST", r"/api/execucao/iniciar", corpo(e.iniciar)),
         _Rota("POST", r"/api/execucao/parar", sem_args(e.parar)),
+        _Rota("POST", r"/api/execucao/pausar", sem_args(e.pausar)),
+        _Rota("POST", r"/api/execucao/retomar", sem_args(e.retomar)),
 
-        _Rota("GET", r"/api/dashboard", sem_args(e.dashboard)),
+        _Rota("GET", r"/api/dashboard", lambda _m, q, _d: e.dashboard(
+            _janela(q.get("janela", [""])[0]), q.get("series", ["0"])[0] == "1")),
         _Rota("GET", r"/api/logs", lambda _m, q, _d: e.logs(int(q.get("desde", ["0"])[0] or 0))),
+        _Rota("GET", r"/api/historico", lambda _m, q, _d: e.historico(_janela_dias(q), q.get("disciplina", [""])[0])),
+        _Rota("GET", r"/api/historico/execucao/([A-Za-z0-9_-]{1,64})", lambda m, _q, _d: e.detalhe_historico(m.group(1))),
+        _Rota("GET", r"/api/historico/comparar", lambda _m, q, _d: e.comparar_historico(q.get("ids", [""])[0])),
+        _Rota("POST", r"/api/historico/apagar", corpo(e.apagar_historico)),
         _Rota("POST", r"/api/logs/abrir-arquivo", sem_args(e.abrir_arquivo_log)),
 
         _Rota("GET", r"/api/notificacoes", sem_args(e.notificacoes)),
@@ -128,6 +165,15 @@ def _montar_rotas(e: EstadoWeb):
 
         _Rota("POST", r"/api/diagnostico/completo", sem_args(e.diagnostico_completo)),
         _Rota("POST", r"/api/diagnostico/camadas", sem_args(e.diagnostico_camadas)),
+        _Rota("GET", r"/api/diagnostico/seguranca", sem_args(e.alertas_seguranca)),
+        _Rota("POST", r"/api/avancado/testar-urls", corpo(e.testar_urls)),
+        _Rota("GET", r"/api/suporte/dumps", sem_args(e.listar_dumps)),
+        _Rota("GET", r"/api/suporte/dumps/(debug_[A-Za-z0-9_\-]{1,160}\.html)", lambda m, _q, _d: e.ler_dump(m.group(1))),
+        _Rota("GET", r"/api/suporte/pacote/previa", sem_args(e.previa_pacote_suporte)),
+        _Rota("GET", r"/api/assistente", sem_args(e.assistente)),
+        _Rota("POST", r"/api/assistente/diagnosticar", corpo(e.diagnosticar_sintoma)),
+        _Rota("POST", r"/api/assistente/aplicar", corpo(e.aplicar_recomendacao)),
+        _Rota("GET", r"/api/linha-do-tempo", lambda _m, q, _d: e.linha_do_tempo(q.get("execucao", [""])[0][:64])),
 
         _Rota("GET", r"/api/experimental", sem_args(e.experimentos)),
         _Rota("POST", r"/api/experimental/executar", corpo(e.executar_experimento)),
@@ -135,8 +181,12 @@ def _montar_rotas(e: EstadoWeb):
         _Rota("GET", r"/api/ajuda", sem_args(e.ajuda)),
         _Rota("GET", r"/api/sobre", sem_args(e.sobre)),
         _Rota("POST", r"/api/sobre/atalho", sem_args(e.criar_atalho)),
+        _Rota("POST", r"/api/sobre/atualizacao", sem_args(e.verificar_atualizacao)),
+        _Rota("POST", r"/api/sobre/preferencias", corpo(e.preferencia_atualizacao)),
 
         _Rota("POST", r"/api/assistente/finalizar", corpo(e.finalizar_assistente)),
+        _Rota("POST", r"/api/configuracao-inicial/validar", corpo(e.validar_etapa_assistente)),
+        _Rota("POST", r"/api/configuracao-inicial/resumo", corpo(e.resumo_assistente)),
         _Rota("POST", r"/api/encerrar", corpo(e.encerrar), exige_aviso=False),
     ]
 
@@ -288,6 +338,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.headers.get(CABECALHO_API) != VALOR_CABECALHO_API:
             self._erro(HTTPStatus.FORBIDDEN, "Requisição recusada (cabeçalho de segurança ausente).")
             return
+        if self.server.checar_inatividade():
+            self._erro(HTTPStatus.UNAUTHORIZED, "Sessão expirada por inatividade. Abra a Interface Web pelo novo link exibido no terminal.")
+            return
+        if metodo == "POST":
+            self.server.estado.registrar_atividade()  # qualquer ação do usuário conta como atividade
 
         estado = self.server.estado
 
@@ -298,6 +353,26 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._responder(HTTPStatus.OK, estado.exportar_configuracao(), "application/json; charset=utf-8",
                             {"Content-Disposition": 'attachment; filename="sigaa_sniper_config.json"'})
+            return
+        if metodo == "GET" and url.path == "/api/historico/exportar":
+            if not estado.aviso_aceito:
+                self._erro(HTTPStatus.FORBIDDEN, "Aceite o aviso legal primeiro.", aviso_pendente=True)
+                return
+            q = parse_qs(url.query)
+            try:
+                conteudo, tipo, nome = estado.exportar_historico(q.get("tipo", [""])[0], q.get("formato", [""])[0],
+                                                                 _janela_dias(q), q.get("disciplina", [""])[0])
+            except ErroApi as erro:
+                self._erro(erro.status, erro.mensagem)
+                return
+            self._responder(HTTPStatus.OK, conteudo, tipo, {"Content-Disposition": f'attachment; filename="{nome}"'})
+            return
+        if metodo == "GET" and url.path == "/api/suporte/pacote":
+            if not estado.aviso_aceito:
+                self._erro(HTTPStatus.FORBIDDEN, "Aceite o aviso legal primeiro.", aviso_pendente=True)
+                return
+            conteudo, nome = estado.gerar_pacote_suporte()
+            self._responder(HTTPStatus.OK, conteudo, "application/zip", {"Content-Disposition": f'attachment; filename="{nome}"'})
             return
         if metodo == "GET" and url.path == "/api/logs/arquivo":
             if not estado.aviso_aceito:
@@ -351,6 +426,7 @@ class ServidorWeb(ThreadingHTTPServer):
     def __init__(self, estado: EstadoWeb, host: str, porta: int):
         self.estado = estado
         self.chave = secrets.token_urlsafe(24)
+        self.ao_expirar = None  # callback opcional (ex: mostrar o novo link no terminal)
         self.rotas = _montar_rotas(estado)
         super().__init__((host, porta), _Handler)
         porta_real = self.server_address[1]
@@ -365,6 +441,23 @@ class ServidorWeb(ThreadingHTTPServer):
     @property
     def porta(self) -> int:
         return self.server_address[1]
+
+    def checar_inatividade(self) -> bool:
+        """Sugestão 070: expirada a sessão, troca a chave de acesso (o link antigo e o
+        cookie deixam de valer) e avisa quem abriu a Interface Web."""
+        if not self.estado.expirou_por_inatividade():
+            return False
+        self.chave = secrets.token_urlsafe(24)
+        if self.ao_expirar:
+            try:
+                self.ao_expirar(self)
+            except Exception:
+                pass
+        return True
+
+    def vigiar_inatividade(self, parar: threading.Event, intervalo: float = 15.0) -> None:
+        while not parar.wait(intervalo):
+            self.checar_inatividade()
 
 
 def criar_servidor(estado: EstadoWeb, host: str, porta: int, tentativas: int = TENTATIVAS_PORTA) -> ServidorWeb:
@@ -387,6 +480,53 @@ def url_de_acesso(servidor: ServidorWeb, host: str) -> Tuple[str, str]:
         host_url = f"[{host_url}]"
     base = f"http://{host_url}:{servidor.porta}"
     return base, f"{base}/?chave={servidor.chave}"
+
+
+def localizar_navegador_chromium() -> Optional[str]:
+    """Caminho do Edge ou do Chrome, se instalados (os dois aceitam --app=URL).
+    O Edge vem com o Windows 10/11, então quase sempre é encontrado."""
+    import shutil
+    candidatos = []
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+            if base:
+                candidatos += [os.path.join(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+                               os.path.join(base, "Google", "Chrome", "Application", "chrome.exe")]
+    for nome in ("msedge", "microsoft-edge", "google-chrome", "chrome", "chromium", "chromium-browser"):
+        encontrado = shutil.which(nome)
+        if encontrado:
+            candidatos.append(encontrado)
+    return next((c for c in candidatos if c and os.path.isfile(c)), None)
+
+
+def abrir_em_janela_de_aplicativo(link: str) -> bool:
+    """Sugestão 003: abre a interface numa janela própria, sem barra de
+    endereço nem abas — parece um programa, não mais uma aba perdida entre
+    outras. Devolve False (e quem chamou usa o navegador padrão) se não houver
+    Edge/Chrome ou se a abertura falhar."""
+    import subprocess
+    navegador = localizar_navegador_chromium()
+    if not navegador:
+        return False
+    try:
+        subprocess.Popen(
+            [navegador, f"--app={link}", "--new-window", "--window-size=1280,860"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            close_fds=True,
+        )
+        return True
+    except OSError:
+        return False
+
+
+def abrir_interface(link: str, modo_aplicativo: bool) -> str:
+    """Abre o link e diz como foi aberto: 'aplicativo', 'navegador' ou 'falhou'."""
+    if modo_aplicativo and abrir_em_janela_de_aplicativo(link):
+        return "aplicativo"
+    try:
+        return "navegador" if webbrowser.open(link) else "falhou"
+    except Exception:
+        return "falhou"
 
 
 def _aguardar_encerramento(evento: threading.Event) -> None:
@@ -452,6 +592,15 @@ def executar_interface_web(abrir_navegador: Optional[bool] = None) -> None:
     thread = threading.Thread(target=servidor.serve_forever, kwargs={"poll_interval": 0.3}, name="InterfaceWeb", daemon=True)
     thread.start()
 
+    def ao_expirar(srv):
+        _base, novo_link = url_de_acesso(srv, host)
+        print("\n  🔒 Sessão da Interface Web expirada por inatividade — credenciais apagadas da memória.")
+        print(f"  Para continuar, abra o novo link:\n\n  {novo_link}\n", flush=True)
+
+    servidor.ao_expirar = ao_expirar
+    parar_vigia = threading.Event()
+    threading.Thread(target=servidor.vigiar_inatividade, args=(parar_vigia,), name="VigiaInatividade", daemon=True).start()
+
     print("\n" + "=" * 62)
     print("  🌐 INTERFACE WEB (modo recomendado) — em execução")
     print("=" * 62)
@@ -468,10 +617,10 @@ def executar_interface_web(abrir_navegador: Optional[bool] = None) -> None:
     print("=" * 62 + "\n", flush=True)
 
     if abrir_navegador:
-        try:
-            if not webbrowser.open(link):
-                print("  (não foi possível abrir o navegador automaticamente — copie o link acima)")
-        except Exception:
+        como = abrir_interface(link, bool(cfg_web.get("modo_aplicativo", True)))
+        if como == "aplicativo":
+            print("  (aberta numa janela própria do Edge/Chrome — o link acima também funciona em qualquer navegador)")
+        elif como == "falhou":
             print("  (não foi possível abrir o navegador automaticamente — copie o link acima)")
 
     try:
@@ -480,6 +629,7 @@ def executar_interface_web(abrir_navegador: Optional[bool] = None) -> None:
         pass
     finally:
         time.sleep(0.2)  # deixa a última resposta (ex: "Encerrar") chegar ao navegador
+        parar_vigia.set()
         servidor.shutdown()
         servidor.server_close()
         estado.finalizar()

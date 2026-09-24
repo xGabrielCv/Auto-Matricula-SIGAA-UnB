@@ -11,7 +11,9 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk, messagebox
 
+from app.core.credentials import normalizar_nascimento
 from app.gui.responsive import tornar_rolavel
+from app.gui.tema import cor
 
 
 class TelaCredenciais(ttk.Frame):
@@ -66,7 +68,7 @@ class TelaCredenciais(ttk.Frame):
         ttk.Button(botoes, text="Salvar para esta execução", command=self._salvar).pack(side="left")
         ttk.Button(botoes, text="Limpar campos", command=self._limpar).pack(side="left", padx=(10, 0))
 
-        self.lbl_status = ttk.Label(corpo, text="", foreground="#1a7f37")
+        self.lbl_status = ttk.Label(corpo, text="", foreground=cor("#1a7f37"))
         self.lbl_status.pack(anchor="w", pady=(10, 0))
 
     def recarregar(self):
@@ -80,13 +82,29 @@ class TelaCredenciais(ttk.Frame):
         cred = self.app.sessao.sigaa
         cred.usuario = self.var_usuario.get().strip()
         cred.senha = self.var_senha.get()
-        cred.cpf = self.var_cpf.get().strip()
-        cred.nascimento = self.var_nascimento.get().strip()
+        from app.core.validadores import normalizar_cpf
+        cred.cpf = normalizar_cpf(self.var_cpf.get())
+        self.var_cpf.set(cred.cpf)
+        cred.nascimento = normalizar_nascimento(self.var_nascimento.get())
+        self.var_nascimento.set(cred.nascimento)
 
         if not cred.preenchida():
             messagebox.showwarning("Campos incompletos", "Preencha matrícula, senha, CPF e data de nascimento.")
             return
-        self.lbl_status.config(text="✅ Credenciais mantidas em memória para esta execução (nada foi salvo em disco).")
+        problemas = cred.problemas()
+        if problemas:
+            # Mesma regra da Web e do terminal: os valores ficam em memória para
+            # corrigir só o campo errado, mas a execução não inicia assim.
+            self.lbl_status.config(text="⚠️ Confira os dados destacados — a execução não inicia assim.", foreground=cor("#9a6700"))
+            messagebox.showwarning(
+                "Confira os dados",
+                "Com estes dados a confirmação da matrícula seria recusada pelo SIGAA:\n\n"
+                + "\n".join(f"• {p}" for p in problemas),
+            )
+            return
+        self.lbl_status.config(text="✅ Credenciais mantidas em memória para esta execução (nada foi salvo em disco).", foreground=cor("#1a7f37"))
+        from app.core import auditoria
+        auditoria.registrar("credenciais_preenchidas")
 
     def _limpar(self):
         self.var_usuario.set("")
@@ -94,4 +112,6 @@ class TelaCredenciais(ttk.Frame):
         self.var_cpf.set("")
         self.var_nascimento.set("")
         self.app.sessao.sigaa.limpar()
-        self.lbl_status.config(text="Campos apagados da tela e da memória.")
+        self.lbl_status.config(text="Campos apagados da tela e da memória.", foreground=cor("#1a7f37"))
+        from app.core import auditoria
+        auditoria.registrar("credenciais_limpas")

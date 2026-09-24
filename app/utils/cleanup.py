@@ -13,11 +13,11 @@ import os
 import time
 from typing import List
 
-from app.utils.paths import raiz_projeto
+from app.utils import paths as _paths
 
 
 def listar_debug_dumps() -> List[str]:
-    padrao = os.path.join(raiz_projeto(), "logs", "debug_*.html")
+    padrao = os.path.join(_paths.raiz_projeto(), "logs", "debug_*.html")
     return sorted(glob.glob(padrao), key=os.path.getmtime, reverse=True)
 
 
@@ -57,7 +57,7 @@ def tamanho_pasta_mb(pasta: str) -> float:
 
 
 def resumo_espaco_em_disco() -> dict:
-    base = raiz_projeto()
+    base = _paths.raiz_projeto()
     return {
         "logs_mb": round(tamanho_pasta_mb(os.path.join(base, "logs")), 2),
         "data_mb": round(tamanho_pasta_mb(os.path.join(base, "data")), 2),

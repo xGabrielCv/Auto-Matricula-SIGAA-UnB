@@ -17,7 +17,7 @@ def test_padroes_seguros():
     s = config.carregar_settings()
     assert s["modo"] == "monitoramento"
     assert s["dry_run"] is True
-    assert s["web"] == {"host": "127.0.0.1", "porta": 8765, "abrir_navegador": True}
+    assert s["web"] == {"host": "127.0.0.1", "porta": 8765, "abrir_navegador": True, "modo_aplicativo": True, "expirar_inatividade_min": 0}
     assert config.validar_settings(s) == []
 
 
@@ -30,6 +30,15 @@ def test_config_antiga_sem_web_recebe_padrao(raiz_temporaria):
     s = config.carregar_settings()
     assert s["modo"] == "matricula" and s["num_workers"] == 7
     assert s["web"]["porta"] == 8765
+
+
+def test_config_web_antiga_recebe_modo_aplicativo(raiz_temporaria):
+    pasta = os.path.join(raiz_temporaria, "config")
+    os.makedirs(pasta, exist_ok=True)
+    with open(os.path.join(pasta, "settings.json"), "w", encoding="utf-8") as f:
+        json.dump({"versao": 3, "web": {"host": "127.0.0.1", "porta": 9000, "abrir_navegador": False}}, f)
+    s = config.carregar_settings()
+    assert s["web"] == {"host": "127.0.0.1", "porta": 9000, "abrir_navegador": False, "modo_aplicativo": True, "expirar_inatividade_min": 0}
 
 
 def test_migracao_de_versao_faz_backup(raiz_temporaria):

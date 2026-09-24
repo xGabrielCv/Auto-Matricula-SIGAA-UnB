@@ -1,37 +1,34 @@
 """
-Assistente de primeira execução — seção 74 do pedido de continuação.
+Assistente de configuração inicial da interface gráfica (desde a 6.1.0).
 
-Aparece só quando não existe nenhuma configuração salva ainda (nem
-settings.json nem disciplinas.json) — ou seja, de fato a primeira vez que
-o programa é usado nesta instalação. Pode ser pulado a qualquer momento;
-nenhuma etapa é obrigatória (seção 74: "não complique... permita pular
-etapas").
+Mesmas etapas e mesma regra da Interface Web (app/core/configuracao_inicial.py):
+cada etapa é conferida antes de avançar, dá para voltar, "Configurar depois"
+fecha sem salvar nada (e o assistente não volta a abrir sozinho), e só a
+revisão final salva. Reabre em Config. Avançadas → "Refazer a configuração inicial".
 """
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
-from app.core.config import Disciplina, salvar_disciplinas, salvar_settings
-from app.core.departamentos import buscar_departamentos
-from app.gui.responsive import aplicar_geometria_responsiva
+from app.core import configuracao_inicial as ci
+from app.core.config import PRESETS_CARGA
+from app.gui.responsive import aplicar_geometria_responsiva, tornar_rolavel
+from app.gui.tema import cor
 
 
 def primeira_execucao(settings: dict, disciplinas: list) -> bool:
-    """True se nenhuma configuração foi salva ainda nesta instalação."""
-    import os
-    from app.utils.paths import pasta_config
-    return not os.path.exists(os.path.join(pasta_config(), "settings.json")) and not disciplinas
+    """Mostra o assistente enquanto ele não foi concluído nem dispensado e não há disciplinas."""
+    return not settings.get("assistente_concluido") and not disciplinas
 
 
 class AssistentePrimeiraExecucao(tk.Toplevel):
     def __init__(self, parent, app):
         super().__init__(parent)
         self.app = app
-        self.title("Bem-vindo ao SIGAA Sniper")
-        aplicar_geometria_responsiva(self, largura_ideal=620, altura_ideal=520, largura_min=480, altura_min=420)
-        self.protocol("WM_DELETE_WINDOW", self._finalizar)
-        self.deiconify()
+        self.title("Configuração inicial — SIGAA Sniper")
+        aplicar_geometria_responsiva(self, largura_ideal=680, altura_ideal=620, largura_min=520, altura_min=460)
+        self.protocol("WM_DELETE_WINDOW", self._dispensar)
         self.transient(parent)
         self.update_idletasks()
         try:
@@ -40,197 +37,275 @@ class AssistentePrimeiraExecucao(tk.Toplevel):
             pass
 
         self.etapa = 0
-        self.etapas = [
-            self._etapa_boas_vindas, self._etapa_credenciais, self._etapa_disciplina,
-            self._etapa_modo, self._etapa_notificacoes, self._etapa_finalizar,
-        ]
+        self.dados = {
+            "credenciais": {"usuario": "", "senha": "", "cpf": "", "nascimento": ""},
+            "disciplinas": [],
+            "execucao": {"modo": app.settings.get("modo", "monitoramento"), "dry_run": True, "preset": "leve", "verificacao_previa": True},
+            "notificacoes": {"windows_ativo": False, "webhook_ativo": False, "webhook_formato": "discord", "webhook_url": "",
+                             "email_ativo": False, "email": {"servidor": "", "porta": 587, "seguranca": "starttls", "usuario": "",
+                                                             "destinatario": "", "remetente": ""},
+                             "email_senha": "", "lembrar_segredos": False},
+            "paineis": {"carregar_ultima_execucao": False, "abrir_dashboard_ao_iniciar": True},
+        }
+        self.etapas = [self._boas_vindas, self._credenciais, self._disciplinas, self._execucao, self._notificacoes,
+                       self._paineis, self._revisao]
 
-        # Rodapé (Pular/Voltar/Próximo) empacotado PRIMEIRO com side="bottom" —
-        # assim o gerenciador de layout reserva o espaço dele antes de dar o
-        # resto pra área de conteúdo, garantindo que os botões nunca fiquem de
-        # fora mesmo se uma etapa tiver bastante conteúdo (mesma correção do
-        # aviso legal, ver app/gui/disclaimer_dialog.py).
         rodape = ttk.Frame(self, padding=(20, 10))
         rodape.pack(side="bottom", fill="x")
-        ttk.Button(rodape, text="Pular assistente", command=self._finalizar).pack(side="left")
-        self.btn_voltar = ttk.Button(rodape, text="◀ Voltar", command=self._voltar)
-        self.btn_voltar.pack(side="right", padx=(6, 0))
+        ttk.Button(rodape, text="Configurar depois", command=self._dispensar).pack(side="left")
         self.btn_proximo = ttk.Button(rodape, text="Próximo ▶", command=self._proximo)
         self.btn_proximo.pack(side="right")
-
+        self.btn_voltar = ttk.Button(rodape, text="◀ Voltar", command=self._voltar)
+        self.btn_voltar.pack(side="right", padx=(0, 6))
         ttk.Separator(self, orient="horizontal").pack(side="bottom", fill="x")
 
-        self.frame_conteudo = ttk.Frame(self, padding=20)
-        self.frame_conteudo.pack(side="top", fill="both", expand=True)
-
+        self.lbl_passos = ttk.Label(self, text="", foreground=cor("#57606a"), padding=(20, 10, 20, 0))
+        self.lbl_passos.pack(side="top", anchor="w")
+        self.lbl_erros = ttk.Label(self, text="", foreground=cor("#cf222e"), wraplength=620, justify="left", padding=(20, 4, 20, 0))
+        self.lbl_erros.pack(side="top", anchor="w")
+        self.area = ttk.Frame(self)
+        self.area.pack(side="top", fill="both", expand=True)
         self._renderizar()
-        self._after_id_centralizar = self.after(100, self._centralizar)
-        # Usa o evento <Destroy> em vez de só sobrescrever destroy(): quando a
-        # janela PAI é destruída (ex: app.destroy() fecha tudo em cascata), o
-        # Tcl destrói este Toplevel diretamente sem necessariamente chamar um
-        # destroy() Python sobrescrito — só o bind captura os dois casos
-        # (fechamento explícito e em cascata). Mesma correção de
-        # app/gui/screens/dashboard.py e logs.py.
-        self.bind("<Destroy>", self._cancelar_centralizacao, add="+")
 
-    def _cancelar_centralizacao(self, _event=None):
-        after_id = getattr(self, "_after_id_centralizar", None)
-        if after_id is not None:
-            try:
-                self.after_cancel(after_id)
-            except Exception:
-                pass
-            self._after_id_centralizar = None
-
-    def _centralizar(self):
-        if not self.winfo_exists():
-            return
-        self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
-        y = (self.winfo_screenheight() // 2) - (self.winfo_height() // 2)
-        self.geometry(f"+{x}+{y}")
-
-    def _limpar(self):
-        for w in self.frame_conteudo.winfo_children():
-            w.destroy()
+    # ── navegação ───────────────────────────────────────────────────────
 
     def _renderizar(self):
-        self._limpar()
+        for w in self.area.winfo_children():
+            w.destroy()
+        moldura = ttk.Frame(self.area, padding=(20, 8))
+        moldura.pack(fill="both", expand=True)
+        self.corpo = tornar_rolavel(moldura)
+        nomes = [n for _, n in ci.ETAPAS]
+        self.lbl_passos.config(text=f"Etapa {self.etapa + 1} de {len(nomes)} · "
+                                    + " → ".join(f"[{n}]" if i == self.etapa else n for i, n in enumerate(nomes)))
         self.btn_voltar.config(state="normal" if self.etapa > 0 else "disabled")
-        self.btn_proximo.config(text="Finalizar" if self.etapa == len(self.etapas) - 1 else "Próximo ▶")
+        self.btn_proximo.config(text="✔ Concluir" if self.etapa == len(self.etapas) - 1 else "Próximo ▶")
         self.etapas[self.etapa]()
 
+    def _mostrar_problemas(self, problemas, avisos=()):
+        texto = "\n".join(f"• {p}" for p in problemas)
+        if avisos:
+            texto += ("\n" if texto else "") + "\n".join(f"ℹ {a}" for a in avisos)
+        self.lbl_erros.config(text=texto, foreground=cor("#cf222e") if problemas else cor("#9a6700"))
+
     def _proximo(self):
-        if self.etapa == len(self.etapas) - 1:
-            self._finalizar()
+        nome = ci.ETAPAS[self.etapa][0]
+        if nome == "revisao":
+            self._concluir()
             return
+        if nome in ("credenciais", "execucao", "notificacoes"):
+            r = ci.validar_etapa(nome, self.dados[nome], self.app.disciplinas)
+            if r["problemas"]:
+                self._mostrar_problemas(r["problemas"])
+                return
+            self._mostrar_problemas([], r["avisos"])
+        else:
+            self._mostrar_problemas([])
         self.etapa += 1
         self._renderizar()
 
     def _voltar(self):
         if self.etapa > 0:
             self.etapa -= 1
+            self._mostrar_problemas([])
             self._renderizar()
 
-    def _finalizar(self):
-        self.app.settings = dict(self.app.settings)
-        salvar_settings(self.app.settings)
-        salvar_disciplinas(self.app.disciplinas)
+    def _dispensar(self):
+        self.app.settings = ci.dispensar(self.app.settings)
         self.destroy()
-        recarregar = getattr(self.app, "recarregar_telas", None)
-        if recarregar:
-            recarregar()  # mostra nas abas o que foi preenchido no assistente
 
-    # ── Etapas ───────────────────────────────────────────────────────────
-
-    def _etapa_boas_vindas(self):
-        ttk.Label(self.frame_conteudo, text="Bem-vindo ao SIGAA Sniper", font=("Segoe UI", 16, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame_conteudo, wraplength=560, justify="left",
-            text=(
-                "Vamos configurar o essencial em algumas etapas rápidas — todas "
-                "opcionais, você pode pular a qualquer momento e configurar tudo "
-                "depois nas abas normais.\n\n"
-                "Etapas: credenciais → disciplina → modo → notificações → concluir."
-            ),
-        ).pack(anchor="w", pady=(14, 0))
-
-    def _etapa_credenciais(self):
-        ttk.Label(self.frame_conteudo, text="1. Credenciais do SIGAA", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame_conteudo, wraplength=560, justify="left", foreground="#666",
-            text="Nunca são salvas em disco — só ficam em memória nesta execução. Pode preencher agora ou pular e preencher na aba Credenciais.",
-        ).pack(anchor="w", pady=(4, 14))
-
-        cred = self.app.sessao.sigaa
-        campos = ttk.Frame(self.frame_conteudo)
-        campos.pack(fill="x")
-        self.var_usuario = tk.StringVar(value=cred.usuario)
-        self.var_senha = tk.StringVar(value=cred.senha)
-        self.var_cpf = tk.StringVar(value=cred.cpf)
-        self.var_nascimento = tk.StringVar(value=cred.nascimento)
-        for i, (rotulo, var, oculto) in enumerate([
-            ("Matrícula:", self.var_usuario, False), ("Senha:", self.var_senha, True),
-            ("CPF:", self.var_cpf, False), ("Nascimento (DD/MM/AAAA):", self.var_nascimento, False),
-        ]):
-            ttk.Label(campos, text=rotulo).grid(row=i, column=0, sticky="w", pady=4)
-            ttk.Entry(campos, textvariable=var, show="•" if oculto else "", width=30).grid(row=i, column=1, pady=4, padx=(10, 0))
-            var.trace_add("write", lambda *_: self._salvar_credenciais_parcial())
-
-    def _salvar_credenciais_parcial(self):
-        cred = self.app.sessao.sigaa
-        cred.usuario = self.var_usuario.get().strip()
-        cred.senha = self.var_senha.get()
-        cred.cpf = self.var_cpf.get().strip()
-        cred.nascimento = self.var_nascimento.get().strip()
-
-    def _etapa_disciplina(self):
-        ttk.Label(self.frame_conteudo, text="2. Adicionar uma disciplina", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame_conteudo, wraplength=560, justify="left", foreground="#666",
-            text="Pode adicionar mais depois na aba Disciplinas. Digite o departamento para buscar.",
-        ).pack(anchor="w", pady=(4, 14))
-
-        campos = ttk.Frame(self.frame_conteudo)
-        campos.pack(fill="x")
-        self.var_disc_codigo = tk.StringVar()
-        self.var_disc_turma = tk.StringVar()
-        self.var_disc_depto_busca = tk.StringVar()
-        ttk.Label(campos, text="Código (ex: FGA0211):").grid(row=0, column=0, sticky="w", pady=4)
-        ttk.Entry(campos, textvariable=self.var_disc_codigo, width=30).grid(row=0, column=1, pady=4, padx=(10, 0))
-        ttk.Label(campos, text="Turma (ex: 01):").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Entry(campos, textvariable=self.var_disc_turma, width=30).grid(row=1, column=1, pady=4, padx=(10, 0))
-        ttk.Label(campos, text="Departamento (nome ou código):").grid(row=2, column=0, sticky="w", pady=4)
-        combo = ttk.Combobox(campos, textvariable=self.var_disc_depto_busca, width=28)
-        combo.grid(row=2, column=1, pady=4, padx=(10, 0))
-        combo.bind("<KeyRelease>", lambda _e: combo.configure(values=[f"{d.codigo} — {d.nome}" for d in buscar_departamentos(self.var_disc_depto_busca.get())[:20]]))
-
-        ttk.Button(self.frame_conteudo, text="➕ Adicionar disciplina", command=self._adicionar_disciplina_wizard).pack(anchor="w", pady=(10, 0))
-        self.lbl_disc_status = ttk.Label(self.frame_conteudo, text=f"{len(self.app.disciplinas)} disciplina(s) já cadastrada(s).", foreground="#1a7f37")
-        self.lbl_disc_status.pack(anchor="w", pady=(6, 0))
-
-    def _adicionar_disciplina_wizard(self):
-        import re
-        codigo = self.var_disc_codigo.get().strip().upper()
-        turma = self.var_disc_turma.get().strip()
-        texto_depto = self.var_disc_depto_busca.get().strip()
-        m = re.match(r"^(\d+)\s*—", texto_depto)
-        depto = int(m.group(1)) if m else (int(texto_depto) if texto_depto.isdigit() else 0)
-
-        if not codigo or not turma or not depto:
-            self.lbl_disc_status.config(text="Preencha código, turma e departamento.", foreground="#cf222e")
+    def _concluir(self):
+        settings, disciplinas, problemas = ci.aplicar(self.dados, self.app.settings, self.app.disciplinas, self.app.sessao)
+        if problemas:
+            self._mostrar_problemas(problemas)
             return
+        self.app.settings, self.app.disciplinas = settings, disciplinas
+        self.app.recarregar_telas()
+        self.destroy()
+        messagebox.showinfo("Configuração inicial", "Configuração salva. Você pode mudar tudo depois nas abas.")
 
-        self.app.disciplinas.append(Disciplina(codigo=codigo, turma=turma, departamento=depto))
-        self.lbl_disc_status.config(text=f"{codigo}-{turma} adicionada! Total: {len(self.app.disciplinas)}.", foreground="#1a7f37")
-        self.var_disc_codigo.set("")
-        self.var_disc_turma.set("")
+    # ── ajudantes de formulário ─────────────────────────────────────────
 
-    def _etapa_modo(self):
-        ttk.Label(self.frame_conteudo, text="3. Modo de operação", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(self.frame_conteudo, wraplength=560, justify="left", foreground="#666", text="Pode mudar isso a qualquer momento na aba Execução.").pack(anchor="w", pady=(4, 14))
+    def _titulo(self, texto, explicacao=""):
+        ttk.Label(self.corpo, text=texto, font=("Segoe UI", 13, "bold")).pack(anchor="w", pady=(0, 6))
+        if explicacao:
+            ttk.Label(self.corpo, text=explicacao, foreground=cor("#57606a"), wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
 
-        self.var_modo_wizard = tk.StringVar(value=self.app.settings.get("modo", "monitoramento"))
-        ttk.Radiobutton(self.frame_conteudo, text="Matrícula automática — tenta se matricular assim que achar vaga", variable=self.var_modo_wizard, value="matricula", command=self._salvar_modo_parcial).pack(anchor="w")
-        ttk.Radiobutton(self.frame_conteudo, text="Somente monitoramento — só avisa, nunca matricula sozinho", variable=self.var_modo_wizard, value="monitoramento", command=self._salvar_modo_parcial).pack(anchor="w")
+    def _campo(self, rotulo, obj, chave, oculto=False):
+        ttk.Label(self.corpo, text=rotulo).pack(anchor="w", pady=(4, 0))
+        var = tk.StringVar(value=str(obj.get(chave, "")))
+        var.trace_add("write", lambda *_: obj.__setitem__(chave, var.get()))
+        ttk.Entry(self.corpo, textvariable=var, width=48, show="•" if oculto else "").pack(anchor="w")
+        return var
 
-    def _salvar_modo_parcial(self):
-        self.app.settings["modo"] = self.var_modo_wizard.get()
+    def _caixa(self, rotulo, obj, chave, rerender=False):
+        var = tk.BooleanVar(value=bool(obj.get(chave)))
 
-    def _etapa_notificacoes(self):
-        ttk.Label(self.frame_conteudo, text="4. Notificações (opcional)", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(
-            self.frame_conteudo, wraplength=560, justify="left", foreground="#666",
-            text="Totalmente opcional — o programa funciona normalmente sem nenhuma. Configure em detalhes na aba Notificações depois, se quiser.",
-        ).pack(anchor="w", pady=(4, 14))
-        ttk.Label(self.frame_conteudo, text="Disponíveis: Telegram, ntfy e alarme sonoro local.", foreground="#666").pack(anchor="w")
+        def mudar():
+            obj[chave] = var.get()
+            if rerender:
+                self._renderizar()
 
-    def _etapa_finalizar(self):
-        ttk.Label(self.frame_conteudo, text="Tudo pronto!", font=("Segoe UI", 16, "bold")).pack(anchor="w")
-        resumo = [
-            f"Credenciais: {'preenchidas' if self.app.sessao.sigaa.preenchida() else 'não preenchidas ainda'}",
-            f"Disciplinas cadastradas: {len(self.app.disciplinas)}",
-            f"Modo: {'Matrícula automática' if self.app.settings.get('modo') == 'matricula' else 'Somente monitoramento'}",
-        ]
-        ttk.Label(self.frame_conteudo, text="\n".join(resumo), justify="left").pack(anchor="w", pady=(14, 0))
-        ttk.Label(self.frame_conteudo, text="Clique em Finalizar para começar a usar o programa.", foreground="#666").pack(anchor="w", pady=(14, 0))
+        ttk.Checkbutton(self.corpo, text=rotulo, variable=var, command=mudar).pack(anchor="w", pady=2)
+        return var
+
+    def _ajuda(self, parent, titulo, texto):
+        ttk.Button(parent, text="Como funciona?", command=lambda: messagebox.showinfo(titulo, texto, parent=self)).pack(side="left", padx=(6, 0))
+
+    # ── etapas ──────────────────────────────────────────────────────────
+
+    def _boas_vindas(self):
+        self._titulo("Bem-vindo ao SIGAA Sniper",
+                     "Vamos configurar o essencial em 6 etapas curtas. Cada etapa é conferida antes de avançar e nada é salvo "
+                     "até você revisar e concluir.\n\n\"Configurar depois\" fecha o assistente; ele pode ser reaberto em "
+                     "Config. Avançadas → Refazer a configuração inicial.")
+
+    def _credenciais(self):
+        cr = self.dados["credenciais"]
+        self._titulo("1. Credenciais do SIGAA", "Ficam só na memória desta execução — nunca em disco. Pode deixar em branco "
+                                               "e preencher depois na aba Credenciais.")
+        self._campo("Matrícula (usuário do SIGAA):", cr, "usuario")
+        self._campo("Senha:", cr, "senha", oculto=True)
+        self._campo("CPF — com ou sem pontos (ex: 123.456.789-09):", cr, "cpf")
+        self._campo("Data de nascimento — DD/MM/AAAA (ex: 01/02/2003):", cr, "nascimento")
+
+    def _disciplinas(self):
+        from app.core.textos import TEXTO_AJUDA_GRUPO, TEXTO_AJUDA_PRIORIDADE
+        from app.gui.escolher_departamento import escolher_departamento
+        self._titulo("2. Disciplinas", f"{len(self.app.disciplinas)} já cadastrada(s). Adicione quantas quiser (ou nenhuma agora).")
+        nova = {"codigo": "", "turma": "", "departamento": "", "grupo": "", "prioridade": "normal"}
+        self._campo("Código da disciplina (ex: FGA0211):", nova, "codigo")
+        self._campo("Turma — só números (ex: 01):", nova, "turma")
+        ttk.Label(self.corpo, text="Código do departamento (ex: 673):").pack(anchor="w", pady=(4, 0))
+        linha = ttk.Frame(self.corpo)
+        linha.pack(anchor="w")
+        var_depto = tk.StringVar()
+        var_depto.trace_add("write", lambda *_: nova.__setitem__("departamento", var_depto.get()))
+        ttk.Entry(linha, textvariable=var_depto, width=12).pack(side="left")
+        lbl_depto = ttk.Label(self.corpo, text="", foreground=cor("#57606a"), wraplength=600)
+
+        def ver():
+            r = escolher_departamento(self)
+            if r:
+                var_depto.set(str(r[0]))
+                lbl_depto.config(text=f"✔ {r[0]} — {r[1]}")
+
+        ttk.Button(linha, text="📋 Ver departamentos", command=ver).pack(side="left", padx=(6, 0))
+        lbl_depto.pack(anchor="w")
+        linha_g = ttk.Frame(self.corpo)
+        linha_g.pack(anchor="w", pady=(6, 0))
+        ttk.Label(linha_g, text="Grupo de alternativas (opcional):").pack(side="left")
+        self._ajuda(linha_g, "Grupo de alternativas", TEXTO_AJUDA_GRUPO)
+        self._campo_simples(nova, "grupo")
+        linha_p = ttk.Frame(self.corpo)
+        linha_p.pack(anchor="w", pady=(6, 0))
+        ttk.Label(linha_p, text="Prioridade:").pack(side="left")
+        var_p = tk.StringVar(value="normal")
+        var_p.trace_add("write", lambda *_: nova.__setitem__("prioridade", var_p.get()))
+        ttk.Combobox(linha_p, textvariable=var_p, values=["alta", "normal", "baixa"], state="readonly", width=10).pack(side="left", padx=(6, 0))
+        self._ajuda(linha_p, "Prioridade", TEXTO_AJUDA_PRIORIDADE)
+        ttk.Label(self.corpo, text="Mesmo grupo = alternativas (garantida uma, as outras saem da busca). Prioridade só define a ordem.",
+                  foreground=cor("#57606a"), wraplength=600).pack(anchor="w", pady=(4, 0))
+
+        def adicionar():
+            r = ci.validar_etapa("disciplina", nova, self.app.disciplinas + [ci.disciplina_de_dados(d)[0] for d in self.dados["disciplinas"]])
+            self._mostrar_problemas(r["problemas"], r["avisos"])
+            if not r["problemas"]:
+                self.dados["disciplinas"].append({**nova, "codigo": nova["codigo"].strip().upper(), "turma": nova["turma"].strip()})
+                self._renderizar()
+                self._mostrar_problemas([], r["avisos"])
+
+        ttk.Button(self.corpo, text="➕ Adicionar esta disciplina", command=adicionar).pack(anchor="w", pady=(8, 4))
+        for i, d in enumerate(self.dados["disciplinas"]):
+            item = ttk.Frame(self.corpo)
+            item.pack(anchor="w", fill="x")
+            ttk.Label(item, text=f"• {d['codigo']}-{d['turma']} · depto {d['departamento']}"
+                                 + (f" · grupo {d['grupo']}" if d["grupo"] else "") + f" · {d['prioridade']}").pack(side="left")
+            ttk.Button(item, text="Remover", command=lambda i=i: (self.dados["disciplinas"].pop(i), self._renderizar())).pack(side="left", padx=6)
+
+    def _campo_simples(self, obj, chave):
+        var = tk.StringVar(value=str(obj.get(chave, "")))
+        var.trace_add("write", lambda *_: obj.__setitem__(chave, var.get()))
+        ttk.Entry(self.corpo, textvariable=var, width=30).pack(anchor="w")
+
+    def _execucao(self):
+        ex = self.dados["execucao"]
+        self._titulo("3. Execução", "Pode mudar tudo depois na aba Execução e em Config. Avançadas.")
+        var_modo = tk.StringVar(value=ex["modo"])
+
+        def mudar_modo():
+            ex["modo"] = var_modo.get()
+            self._renderizar()
+
+        ttk.Radiobutton(self.corpo, text="👀 Somente monitoramento — avisa quando achar vaga, nunca matricula sozinho",
+                        variable=var_modo, value="monitoramento", command=mudar_modo).pack(anchor="w")
+        ttk.Radiobutton(self.corpo, text="🎯 Matrícula automática — tenta se matricular assim que achar vaga",
+                        variable=var_modo, value="matricula", command=mudar_modo).pack(anchor="w")
+        if ex["modo"] == "matricula":
+            self._caixa("DRY RUN (recomendado para começar): simula tudo, mas não confirma de verdade", ex, "dry_run", rerender=True)
+            if not ex["dry_run"]:
+                ttk.Label(self.corpo, text="⚠️ Sem DRY RUN, ao achar vaga o programa confirma a matrícula de verdade.",
+                          foreground=cor("#cf222e")).pack(anchor="w")
+        ttk.Label(self.corpo, text="Perfil de carga (quanto o programa consulta o SIGAA):").pack(anchor="w", pady=(8, 0))
+        rotulos = {k: f"{p['rotulo']} — {p['num_workers']} workers, {p['intervalo_busca']}s" for k, p in PRESETS_CARGA.items()}
+        var_p = tk.StringVar(value=rotulos[ex["preset"]])
+        var_p.trace_add("write", lambda *_: ex.__setitem__("preset", next(k for k, v in rotulos.items() if v == var_p.get())))
+        ttk.Combobox(self.corpo, textvariable=var_p, values=list(rotulos.values()), state="readonly", width=46).pack(anchor="w")
+        self._caixa("Verificar login e disciplinas antes de começar (recomendado)", ex, "verificacao_previa")
+
+    def _notificacoes(self):
+        from app.core.textos import TEXTO_AJUDA_EMAIL, TEXTO_AJUDA_WEBHOOK
+        n = self.dados["notificacoes"]
+        self._titulo("4. Notificações (opcional)", "O programa funciona sem nenhuma. Telegram, ntfy e alarme ficam na aba Notificações.")
+        self._caixa("🪟 Aviso na área de notificações do Windows (não precisa configurar nada)", n, "windows_ativo")
+        linha = ttk.Frame(self.corpo)
+        linha.pack(anchor="w", pady=(6, 0))
+        var_w = tk.BooleanVar(value=n["webhook_ativo"])
+        ttk.Checkbutton(linha, text="🔗 Webhook (Discord, Slack…)", variable=var_w,
+                        command=lambda: (n.__setitem__("webhook_ativo", var_w.get()), self._renderizar())).pack(side="left")
+        self._ajuda(linha, "Webhook", TEXTO_AJUDA_WEBHOOK)
+        if n["webhook_ativo"]:
+            ttk.Label(self.corpo, text="Formato:").pack(anchor="w")
+            var_f = tk.StringVar(value=n["webhook_formato"])
+            var_f.trace_add("write", lambda *_: n.__setitem__("webhook_formato", var_f.get()))
+            ttk.Combobox(self.corpo, textvariable=var_f, values=["discord", "slack", "json"], state="readonly", width=12).pack(anchor="w")
+            self._campo("URL do webhook (https://…):", n, "webhook_url", oculto=True)
+        linha = ttk.Frame(self.corpo)
+        linha.pack(anchor="w", pady=(6, 0))
+        var_e = tk.BooleanVar(value=n["email_ativo"])
+        ttk.Checkbutton(linha, text="✉️ E-mail (SMTP)", variable=var_e,
+                        command=lambda: (n.__setitem__("email_ativo", var_e.get()), self._renderizar())).pack(side="left")
+        self._ajuda(linha, "E-mail", TEXTO_AJUDA_EMAIL)
+        if n["email_ativo"]:
+            e = n["email"]
+            self._campo("Servidor SMTP (ex: smtp.gmail.com):", e, "servidor")
+            ttk.Label(self.corpo, text="Segurança:").pack(anchor="w")
+            var_s = tk.StringVar(value=e["seguranca"])
+
+            def mudar_seg(*_):
+                e["seguranca"] = var_s.get()
+                e["porta"] = 465 if var_s.get() == "ssl" else 587
+
+            var_s.trace_add("write", mudar_seg)
+            ttk.Combobox(self.corpo, textvariable=var_s, values=["starttls", "ssl"], state="readonly", width=12).pack(anchor="w")
+            self._campo("Usuário (seu e-mail):", e, "usuario")
+            self._campo("Senha (Gmail/Outlook: senha de app):", n, "email_senha", oculto=True)
+            self._campo("Enviar para:", e, "destinatario")
+            self._campo("Remetente (opcional):", e, "remetente")
+        if n["webhook_ativo"] or n["email_ativo"]:
+            self._caixa("Guardar a URL/senha neste computador (cifradas com a sua conta do Windows)", n, "lembrar_segredos")
+
+    def _paineis(self):
+        p = self.dados["paineis"]
+        self._titulo("5. Painéis")
+        self._caixa("Carregar os dados da última execução ao abrir o programa", p, "carregar_ultima_execucao")
+        ttk.Label(self.corpo, foreground=cor("#57606a"), wraplength=600, justify="left",
+                  text="Desligado (recomendado): Dashboard e Logs começam vazios até você iniciar uma execução; as anteriores "
+                       "ficam na aba Histórico. Ligado: mostram a última execução marcada como recuperada — o tempo não corre "
+                       "e nada é iniciado.").pack(anchor="w", pady=(0, 8))
+        self._caixa("Abrir o Dashboard automaticamente ao iniciar uma execução", p, "abrir_dashboard_ao_iniciar")
+
+    def _revisao(self):
+        self._titulo("6. Revisão", "Confira. \"◀ Voltar\" corrige qualquer etapa; \"✔ Concluir\" confere tudo de novo e salva.")
+        for linha in ci.resumo(self.dados):
+            ttk.Label(self.corpo, text=linha, wraplength=600, justify="left").pack(anchor="w", pady=1)

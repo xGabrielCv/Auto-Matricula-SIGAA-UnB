@@ -18,39 +18,9 @@ Sem dependências extra — usa só httpx, que já é dependência principal.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 
-import httpx
-
+from app.core.relogio import medir_offset_relogio  # promovido ao núcleo (sugestão 038): opção do agendamento
 from app.experimental import Experimento, registrar
-
-
-async def medir_offset_relogio(url: str = "https://sigaa.unb.br/sigaa/public/") -> dict:
-    """Faz uma requisição HEAD/GET e compara o header Date do servidor com o relógio local."""
-    antes = datetime.now(timezone.utc)
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(url)
-    depois = datetime.now(timezone.utc)
-
-    date_header = resp.headers.get("date")
-    if not date_header:
-        raise RuntimeError("O servidor não enviou o header 'Date' na resposta — não é possível medir o offset.")
-
-    hora_servidor = parsedate_to_datetime(date_header)
-    if hora_servidor.tzinfo is None:
-        hora_servidor = hora_servidor.replace(tzinfo=timezone.utc)
-
-    latencia_ida_volta = (depois - antes).total_seconds()
-    hora_local_estimada_no_momento_do_header = antes + (depois - antes) / 2
-    offset_seg = (hora_servidor - hora_local_estimada_no_momento_do_header).total_seconds()
-
-    return {
-        "hora_servidor": hora_servidor.isoformat(),
-        "hora_local": depois.isoformat(),
-        "offset_segundos": round(offset_seg, 2),
-        "latencia_ida_volta_segundos": round(latencia_ida_volta, 3),
-    }
 
 
 def _executar_sincrono() -> str:

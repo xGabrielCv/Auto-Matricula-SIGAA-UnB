@@ -17,13 +17,14 @@ from collections import deque
 from tkinter import ttk
 
 from app.dashboard.log_humano import CATEGORIAS, traduzir
-from app.dashboard.metrics import LogTailer
+from app.dashboard.metrics import LogTailer, criar_tailer_da_sessao  # noqa: F401
 from app.utils.paths import caminho as caminho_projeto
+from app.gui.tema import cor
 
 CORES_CATEGORIA = {
-    "ERRO": "#cf222e", "AVISO": "#9a6700", "SUCESSO": "#1a7f37",
-    "REDE": "#0969da", "SEGURANCA": "#8250df", "SISTEMA": "#57606a",
-    "MATRICULA": "#bf3989", "MONITORAMENTO": "#1a7f37", "NOTIFICACAO": "#0969da", "DEBUG": "#57606a",
+    "ERRO": cor("#cf222e"), "AVISO": cor("#9a6700"), "SUCESSO": cor("#1a7f37"),
+    "REDE": cor("#0969da"), "SEGURANCA": cor("#8250df"), "SISTEMA": cor("#57606a"),
+    "MATRICULA": cor("#bf3989"), "MONITORAMENTO": cor("#1a7f37"), "NOTIFICACAO": cor("#0969da"), "DEBUG": cor("#57606a"),
 }
 
 MAX_LINHAS_MEMORIA = 1000
@@ -33,7 +34,8 @@ class TelaLogs(ttk.Frame):
     def __init__(self, parent, app):
         super().__init__(parent, padding=20)
         self.app = app
-        self.tailer = None
+        self.tailer = criar_tailer_da_sessao(caminho_projeto("data", "sigaa_sniper_audit.json"),
+                                             bool(app.settings.get("carregar_ultima_execucao")))
         self.buffer = deque(maxlen=MAX_LINHAS_MEMORIA)
         self.pausado = False
         self.workers_vistos = {"Todos"}
@@ -109,7 +111,7 @@ class TelaLogs(ttk.Frame):
 
         self.var_tecnico = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame_detalhes, text="Mostrar detalhes técnicos", variable=self.var_tecnico, command=self._mostrar_detalhes).pack(anchor="w", pady=(6, 0))
-        self.txt_tecnico = tk.Text(frame_detalhes, height=5, wrap="word", state="disabled", background="#f6f8fa")
+        self.txt_tecnico = tk.Text(frame_detalhes, height=5, wrap="word", state="disabled", background=cor("#f6f8fa"))
         self.txt_tecnico.pack(fill="both", expand=True, pady=(4, 0))
         divisor.add(frame_detalhes, weight=1)
 
@@ -179,8 +181,8 @@ class TelaLogs(ttk.Frame):
             )
             self._registros_por_iid[iid] = (registro, evento)
 
-        for cat, cor in CORES_CATEGORIA.items():
-            self.tree.tag_configure(cat, foreground=cor)
+        for cat, tom in CORES_CATEGORIA.items():
+            self.tree.tag_configure(cat, foreground=tom)
 
         filhos = self.tree.get_children()
         if filhos:

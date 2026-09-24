@@ -19,19 +19,27 @@ from app.core.diagnostics import VERSAO_APP
 from app.core.runner import ExecutorMotor
 from app.utils.cleanup import limpar_debug_dumps
 
-from app.gui.screens.credenciais import TelaCredenciais
+# Fase 6 (010): o tema precisa estar definido ANTES de importar as telas — as
+# cores delas (cor(...)) são lidas quando cada tela é criada/importada.
+from app.gui import tema as _tema
+_tema.definir_tema(str(_tema._carregar_preferencias().get("tema", "claro")))
+
+from app.gui.screens.credenciais import TelaCredenciais  # noqa: E402
 from app.gui.screens.disciplinas import TelaDisciplinas
 from app.gui.screens.execucao import TelaExecucao
 from app.gui.screens.notificacoes import TelaNotificacoes
 from app.gui.screens.avancado import TelaAvancado
 from app.gui.screens.dashboard import TelaDashboard
 from app.gui.screens.logs import TelaLogs
+from app.gui.screens.historico import TelaHistorico
 from app.gui.screens.diagnostico import TelaDiagnostico
 from app.gui.screens.experimental import TelaExperimental
 from app.gui.screens.ajuda import TelaAjuda
 from app.gui.screens.sobre import TelaSobre
+from app.gui.barra_status import BarraStatus
 from app.gui.disclaimer_dialog import DialogoAvisoLegal
 from app.gui.responsive import aplicar_geometria_responsiva
+from app.gui.tema import cor
 
 
 class SniperApp(tk.Tk):
@@ -45,6 +53,7 @@ class SniperApp(tk.Tk):
         # nunca ultrapassando 90% dela, e cada tela internamente também é
         # rolável (ver app/gui/responsive.py) como segunda camada de segurança.
         aplicar_geometria_responsiva(self, largura_ideal=1080, altura_ideal=740, largura_min=760, altura_min=560)
+        _tema.preparar(self)  # tema claro/escuro e escala de fonte (Fase 6, 010)
         self.aceitou_aviso_legal = True
 
         # Aviso legal obrigatório em TODA execução (seção 94.8) — mostrado
@@ -66,10 +75,14 @@ class SniperApp(tk.Tk):
         self.update_idletasks()
         dlg = DialogoAvisoLegal(self)
         self.wait_window(dlg)
+        from app.core import auditoria
+        auditoria.definir_origem("interface grafica")
         if not dlg.aceito:
+            auditoria.registrar("aviso_recusado")
             self.aceitou_aviso_legal = False
             self.destroy()
             return
+        auditoria.registrar_aceite_aviso()
 
         self.sessao = obter_sessao()
         self.settings = carregar_settings()
@@ -78,6 +91,9 @@ class SniperApp(tk.Tk):
         aplicar_segredos_notificacao_salvos(self.sessao.notificacao)
 
         self._executor: Optional[ExecutorMotor] = None
+        self._execucao_info: dict = {}
+        self._motor = None
+        self._parando = False
 
         limpar_debug_dumps(manter=self.settings["logs"]["arquivos_mantidos"])  # limpeza automática silenciosa ao abrir (seção 28)
 
@@ -101,15 +117,22 @@ class SniperApp(tk.Tk):
         sidebar.pack_propagate(False)
 
         ttk.Label(sidebar, text="SIGAA Sniper", font=("Segoe UI", 13, "bold")).pack(anchor="w")
-        ttk.Label(sidebar, text=f"Versão {VERSAO_APP}", foreground="#666", font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 16))
+        ttk.Label(sidebar, text=f"Versão {VERSAO_APP}", foreground=cor("#666"), font=("Segoe UI", 8)).pack(anchor="w", pady=(0, 16))
 
-        self.conteudo = ttk.Frame(container)
-        self.conteudo.pack(side="left", fill="both", expand=True)
+        direita = ttk.Frame(container)
+        direita.pack(side="left", fill="both", expand=True)
+        self.barra_status = BarraStatus(direita, self)
+        self.barra_status.pack(side="top", fill="x")
+        ttk.Separator(direita, orient="horizontal").pack(side="top", fill="x")
+
+        self.conteudo = ttk.Frame(direita)
+        self.conteudo.pack(side="top", fill="both", expand=True)
 
         self._telas = {}
         self._registrar_tela("execucao", "▶️ Execução", TelaExecucao)
         self._registrar_tela("dashboard", "📊 Dashboard", TelaDashboard)
         self._registrar_tela("logs", "📜 Logs", TelaLogs)
+        self._registrar_tela("historico", "🗂️ Histórico", TelaHistorico)
         self._registrar_tela("credenciais", "🔑 Credenciais", TelaCredenciais)
         self._registrar_tela("disciplinas", "📚 Disciplinas", TelaDisciplinas)
         self._registrar_tela("notificacoes", "🔔 Notificações", TelaNotificacoes)
@@ -171,16 +194,54 @@ class SniperApp(tk.Tk):
     def salvar_settings(self):
         salvar_settings(self.settings)
 
-    def iniciar_motor(self, ao_finalizar: Callable[[Optional[Exception]], None]):
+    def iniciar_motor(self, ao_finalizar: Callable[[Optional[Exception]], None], demo: bool = False):
         if self._executor and self._executor.em_execucao():
             raise RuntimeError("O motor já está em execução. Pare antes de iniciar de novo.")
-        motor = construir_motor(self.settings, self.sessao, self.disciplinas)
+        motor = construir_motor(self.settings, self.sessao, self.disciplinas, demo=demo)
+        self._motor = motor  # o Dashboard lê o estado direto do motor (Fase 2)
         self._executor = ExecutorMotor(motor, ao_finalizar=ao_finalizar)
+        self._execucao_info = {"modo": self.settings["modo"], "dry_run": True if demo else self.settings["dry_run"], "demo": demo}
+        self._parando = False
         self._executor.iniciar()
+        self.barra_status.atualizar_agora()
 
     def parar_motor(self):
         if self._executor:
+            self._parando = bool(self._executor.em_execucao())
             self._executor.parar()
+            self.barra_status.atualizar_agora()
+
+    def estado_execucao(self) -> dict:
+        """Estado atual para a barra de status (e para quem mais precisar)."""
+        rodando = bool(self._executor and self._executor.em_execucao())
+        if not rodando:
+            self._parando = False
+            return {"em_execucao": False}
+        return {"em_execucao": True, "parando": self._parando, "pausado": bool(getattr(self._motor, "pausado", False)),
+                "motivo_pausa": getattr(self._motor, "motivo_pausa", None), **self._execucao_info}
+
+    def pausar_motor(self) -> None:
+        if self._executor and self._executor.em_execucao() and hasattr(self._motor, "pausar"):
+            self._executor.chamar(self._motor.pausar, "usuario")
+
+    def retomar_motor(self) -> bool:
+        """False quando a pausa é da janela de execução (só ela retoma)."""
+        if getattr(self._motor, "motivo_pausa", None) == "janela":
+            return False
+        if self._executor and self._executor.em_execucao() and hasattr(self._motor, "retomar"):
+            self._executor.chamar(self._motor.retomar, "usuario")
+        return True
+
+    def aplicar_disciplinas_na_execucao(self, adicionar=(), remover=()) -> bool:
+        """Sugestão 037: mudanças de disciplina valem na hora para a execução em andamento."""
+        if not (self._executor and self._executor.em_execucao() and hasattr(self._motor, "adicionar_alvo")):
+            return False
+        for chave in remover:
+            self._executor.chamar(self._motor.remover_alvo, chave)
+        for d in adicionar:
+            if d.ativa:
+                self._executor.chamar(self._motor.adicionar_alvo, d.como_alvo())
+        return True
 
     def _ao_fechar(self):
         if self._executor and self._executor.em_execucao():

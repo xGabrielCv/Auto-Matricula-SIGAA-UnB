@@ -2,6 +2,8 @@
 .buildenv/
 build/
 dist/
+dist_pasta/
+SHA256SUMS.txt
 
 # Ambientes virtuais comuns
 venv/
@@ -25,6 +27,16 @@ data/*.tmp
 logs/*.log
 logs/*.log.*
 logs/debug_*.html
+# Fases 3-6: histórico, relatórios, trilha de ações, exportações, perfis e versões guardadas
+data/*.db
+data/*.db.*
+data/*.db-journal
+data/*.jsonl
+data/*.jsonl.*
+data/relatorios/
+data/exportacoes/
+config/perfis/
+config/historico/
 !config/.gitkeep
 !data/.gitkeep
 !logs/.gitkeep
@@ -53,3 +65,9 @@ playwright-report/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Documentos internos de planejamento (não publicar)
+docs/100_SUGESTOES_EXPANSAO_PROJETO.md
+docs/PLANO_E_RELATORIOS_DE_FASES.md
+docs/README_ANTIGO.md
+docs/AUDITORIA_POS_6.0.0.md

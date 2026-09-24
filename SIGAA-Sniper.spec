@@ -7,7 +7,13 @@ a = Analysis(
     binaries=[],
     # Interface Web (HTML/CSS/JS) e a ajuda offline vão DENTRO do .exe —
     # o programa funciona mesmo que só o executável seja copiado.
-    datas=[('app/web/static', 'app/web/static'), ('docs', 'docs')],
+    # Só os documentos de ajuda ao usuário: a pasta docs/ também guarda
+    # documentos internos de desenvolvimento, que não devem ir no pacote.
+    datas=[
+        ('app/web/static', 'app/web/static'),
+        ('docs/GUIA_DE_USO.md', 'docs'),
+        ('docs/SEGURANCA.md', 'docs'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

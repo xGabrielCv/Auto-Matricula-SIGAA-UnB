@@ -120,13 +120,62 @@ def gerar_painel_erros(coletor: ColetorMetricas) -> Panel:
     return Panel("\n".join(m["log_erros"]), title="[bold red]⚠️ EXCEÇÕES E FALHAS[/]", style="red")
 
 
-def main(arquivo_log: str = None) -> None:
-    log_file = arquivo_log or caminho_projeto("data", "sigaa_sniper_audit.json")
+COR_ESTADO_ALVO = {"vaga": "bold green", "matriculada": "bold green", "simulada": "green", "tentando": "bold yellow",
+                   "bloqueada": "bold red", "departamento_indisponivel": "red", "falha": "yellow"}
 
+
+def gerar_painel_alvos(snap: dict) -> Panel:
+    """Estado de cada disciplina, vindo direto do motor (sugestão 019)."""
+    from app.dashboard.analise import descrever_fase, tempo_relativo
+    table = Table(expand=True, show_header=True, header_style="bold magenta", border_style="dim")
+    for titulo, justificar in (("Disciplina", "left"), ("Estado", "left"), ("Vagas", "center"),
+                               ("Última leitura", "center"), ("Buscas", "center"), ("Vaga vista", "center")):
+        table.add_column(titulo, justify=justificar)
+    for a in snap["alvos"]:
+        cor = COR_ESTADO_ALVO.get(a["estado"], "white")
+        table.add_row(a["chave"], f"[{cor}]{a['estado_rotulo']}[/]", "—" if a["vagas"] is None else str(a["vagas"]),
+                      tempo_relativo(a["ultima_leitura"]), str(a["buscas"]), str(a["vagas_vistas"]))
+    return Panel(table, title=f"[bold white]📚 DISCIPLINAS — {descrever_fase(snap)['texto']}[/]", style="magenta")
+
+
+def criar_console() -> Console:
     # legacy_windows=False evita uma falha real encontrada em testes: em alguns
     # terminais Windows (cp1252), o modo "legacy" do rich tenta escrever emojis
     # direto pela API do console e quebra com UnicodeEncodeError.
-    console = Console(legacy_windows=False)
+    return Console(legacy_windows=False)
+
+
+def montar_layout(com_rodape: bool = False, qtd_alvos: int = 0) -> Layout:
+    layout = Layout()
+    partes = [Layout(name="topo", size=5)]
+    if qtd_alvos:
+        partes.append(Layout(name="alvos", size=min(qtd_alvos, 8) + 4))
+    partes += [Layout(name="meio"), Layout(name="base", size=10)]
+    if com_rodape:
+        partes.append(Layout(name="rodape", size=3))
+    layout.split(*partes)
+    layout["base"].split_row(Layout(name="vagas", ratio=2), Layout(name="erros", ratio=1))
+    return layout
+
+
+def atualizar_layout(layout: Layout, coletor: ColetorMetricas, rodape=None, snap=None) -> None:
+    layout["topo"].update(gerar_painel_topo(coletor))
+    if snap is not None:
+        try:
+            layout["alvos"].update(gerar_painel_alvos(snap))
+        except KeyError:
+            pass
+    layout["meio"].update(gerar_tabela_workers(coletor))
+    layout["vagas"].update(gerar_painel_vagas(coletor))
+    layout["erros"].update(gerar_painel_erros(coletor))
+    if rodape is not None:
+        layout["rodape"].update(rodape)
+
+
+def main(arquivo_log: str = None) -> None:
+    log_file = arquivo_log or caminho_projeto("data", "sigaa_sniper_audit.json")
+
+    console = criar_console()
     console.clear()
 
     if not __import__("os").path.exists(log_file):
@@ -134,17 +183,14 @@ def main(arquivo_log: str = None) -> None:
         while not __import__("os").path.exists(log_file):
             time.sleep(1)
 
-    layout = Layout()
-    layout.split(Layout(name="topo", size=5), Layout(name="meio"), Layout(name="base", size=10))
-    layout["base"].split_row(Layout(name="vagas", ratio=2), Layout(name="erros", ratio=1))
-
+    layout = montar_layout()
     tailer = LogTailer(log_file)
     coletor = ColetorMetricas()
 
     for linha in tailer.read_new_lines():
         coletor.processar_linha(linha, ao_vivo=False)
 
-    with Live(layout, console=console, refresh_per_second=5) as live:
+    with Live(layout, console=console, refresh_per_second=5):
         while True:
             novas = tailer.read_new_lines()
             if not novas:
@@ -152,11 +198,7 @@ def main(arquivo_log: str = None) -> None:
             else:
                 for linha in novas:
                     coletor.processar_linha(linha, ao_vivo=True)
-
-            layout["topo"].update(gerar_painel_topo(coletor))
-            layout["meio"].update(gerar_tabela_workers(coletor))
-            layout["vagas"].update(gerar_painel_vagas(coletor))
-            layout["erros"].update(gerar_painel_erros(coletor))
+            atualizar_layout(layout, coletor)
 
 
 if __name__ == "__main__":

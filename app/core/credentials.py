@@ -13,7 +13,54 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import date, datetime
+from typing import List, Optional
+
+
+def cpf_valido(cpf: str) -> bool:
+    """Confere os dois dígitos verificadores do CPF (aceita com ou sem pontuação).
+
+    Um CPF real sempre passa nesta conta — então recusar aqui nunca bloqueia
+    um usuário legítimo, só erros de digitação. Sem isso, um CPF digitado
+    errado só aparecia no pior momento: cada vaga encontrada virava uma
+    confirmação recusada pelo SIGAA."""
+    numeros = re.sub(r"\D", "", cpf or "")
+    if len(numeros) != 11 or numeros == numeros[0] * 11:
+        return False
+    for tamanho in (9, 10):
+        soma = sum(int(numeros[i]) * (tamanho + 1 - i) for i in range(tamanho))
+        digito = (soma * 10) % 11 % 10
+        if digito != int(numeros[tamanho]):
+            return False
+    return True
+
+
+def normalizar_nascimento(texto: str) -> str:
+    """Leva formas comuns de digitar a data ao formato DD/MM/AAAA que o SIGAA
+    espera: "01022003" → "01/02/2003", "1/2/2003" → "01/02/2003",
+    "01-02-2003" → "01/02/2003". Se não reconhecer, devolve o texto como veio
+    (a validação é quem avisa)."""
+    t = (texto or "").strip()
+    if re.fullmatch(r"\d{8}", t):
+        return f"{t[:2]}/{t[2:4]}/{t[4:]}"
+    m = re.fullmatch(r"(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})", t)
+    if m:
+        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}/{m.group(3)}"
+    return t
+
+
+def problema_nascimento(texto: str, hoje: Optional[date] = None) -> Optional[str]:
+    """Devolve a descrição do problema com a data (ou None se estiver ok)."""
+    hoje = hoje or date.today()
+    try:
+        data = datetime.strptime(texto or "", "%d/%m/%Y").date()
+    except ValueError:
+        return "Data de nascimento inválida — use o formato DD/MM/AAAA com uma data que exista (ex: 01/02/2003)."
+    if data >= hoje:
+        return "Data de nascimento no futuro — confira o ano."
+    if data.year < 1900:
+        return "Data de nascimento com ano improvável — confira o ano."
+    return None
 
 
 @dataclass
@@ -26,6 +73,18 @@ class CredenciaisSigaa:
 
     def preenchida(self) -> bool:
         return bool(self.usuario and self.senha and self.cpf and self.nascimento)
+
+    def problemas(self) -> List[str]:
+        """Problemas de formato que fariam a confirmação da matrícula ser recusada.
+        Só olha campos preenchidos — campo vazio é tratado por preenchida()."""
+        from app.core.validadores import problema_cpf, problema_nascimento_texto
+        encontrados = []
+        for valor, validar in ((self.cpf, problema_cpf), (self.nascimento, problema_nascimento_texto)):
+            if valor:
+                problema = validar(valor)
+                if problema:
+                    encontrados.append(problema)
+        return encontrados
 
     def cpf_numeros(self) -> str:
         return re.sub(r"\D", "", self.cpf)
@@ -49,6 +108,9 @@ class CredenciaisNotificacao:
     telegram_chat_id: str = ""
     ntfy_topic: str = ""
     ntfy_servidor: str = "https://ntfy.sh"
+    # Fase 6: URL do webhook (081) e senha do e-mail (082) também são segredos.
+    webhook_url: str = ""
+    email_senha: str = ""
 
     def telegram_configurado(self) -> bool:
         return bool(self.telegram_token and self.telegram_chat_id)
@@ -56,8 +118,12 @@ class CredenciaisNotificacao:
     def ntfy_configurado(self) -> bool:
         return bool(self.ntfy_topic)
 
+    def webhook_configurado(self) -> bool:
+        return self.webhook_url.startswith("https://")
+
     def limpar(self) -> None:
         self.telegram_token = self.telegram_chat_id = self.ntfy_topic = ""
+        self.webhook_url = self.email_senha = ""
 
 
 @dataclass

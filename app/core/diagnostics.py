@@ -20,8 +20,8 @@ from app.core.crash_recovery import verificar_encerramento_anterior
 from app.core.resource_monitor import resumo_recursos
 from app.utils.cleanup import resumo_espaco_em_disco
 from app.utils.paths import raiz_projeto
+from app.versao import VERSAO_APP  # reexportado: GUI/terminal/Web importam daqui
 
-VERSAO_APP = "5.1.0"
 PACOTES_NECESSARIOS = ["httpx", "beautifulsoup4", "rich"]
 
 
@@ -196,14 +196,6 @@ def checar_saude_sistema() -> List[ResultadoChecagem]:
         resultados.append(ResultadoChecagem("Encerramento da execução anterior", True, "Normal (ou o programa ainda não rodou o motor nesta instalação)"))
 
     return resultados
-
-
-def _texto_estado(ok) -> str:
-    if ok is True:
-        return "✅ OK"
-    if ok is False:
-        return "❌ ERRO"
-    return "⚪ NÃO TESTADO/DESATIVADO"
 
 
 def gerar_relatorio_texto(resultados: List[ResultadoChecagem]) -> str:

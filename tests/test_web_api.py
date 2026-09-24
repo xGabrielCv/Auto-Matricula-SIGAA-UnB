@@ -21,7 +21,7 @@ from app.web.server import criar_servidor
 
 H = {"X-Requested-With": "SIGAA-Sniper"}
 TODAS = {chave: True for chave, _ in CONFIRMACOES}
-CRED = {"usuario": "200012345", "senha": "s3nh@", "cpf": "12345678900", "nascimento": "01/02/2003"}
+CRED = {"usuario": "200012345", "senha": "s3nh@", "cpf": "12345678909", "nascimento": "01/02/2003"}
 
 
 @pytest.fixture
@@ -275,8 +275,12 @@ def test_notificacoes_persistencia_opt_in(web, raiz_temporaria):
     assert r.status_code == 200 and not (raiz_temporaria / "config" / "notificacoes.secrets.json").exists()
     assert e.settings["notificacoes"]["eventos"]["erro_critico"] is True
     c.post("/api/notificacoes", headers=H, json={**base, "lembrar": True})
-    segredos = json.loads((raiz_temporaria / "config" / "notificacoes.secrets.json").read_text(encoding="utf-8"))
-    assert segredos["ntfy_servidor"] == "https://x.ntfy"
+    # Fase 6 (065): no Windows o arquivo é cifrado com a DPAPI — o token não aparece no disco.
+    from app.core.config import carregar_segredos_notificacao
+    bruto = (raiz_temporaria / "config" / "notificacoes.secrets.json").read_text(encoding="utf-8")
+    assert carregar_segredos_notificacao()["ntfy_servidor"] == "https://x.ntfy"
+    if os.name == "nt":
+        assert "TOK" not in bruto and json.loads(bruto)["formato"] == "dpapi-v1"
     c.post("/api/notificacoes/persistencia", headers=H, json={"lembrar": False})
     assert not (raiz_temporaria / "config" / "notificacoes.secrets.json").exists()
     r = c.post("/api/notificacoes/testar", headers=H, json={"canal": "todos"})
@@ -367,11 +371,183 @@ def test_ajuda_sobre_e_assistente(web, raiz_temporaria):
     assert "Guia de Uso" in docs[0]["conteudo"]
     assert c.get("/api/sobre", headers=H).json()["repositorio"].startswith("https://github.com/")
     assert c.get("/api/estado", headers=H).json()["primeira_execucao"] is True
-    r = c.post("/api/assistente/finalizar", headers=H, json={
+    # Pós-6.0.0: o assistente valida tudo antes de salvar (credencial pela metade ou disciplina inválida → 400).
+    ruim = c.post("/api/assistente/finalizar", headers=H, json={
         "credenciais": {"usuario": "u", "senha": "", "cpf": "", "nascimento": ""},
         "disciplinas": [{"codigo": "fga0211", "turma": "01", "departamento": 673}, {"codigo": "", "turma": "x", "departamento": 1}],
-        "modo": "matricula"})
+        "execucao": {"modo": "matricula", "preset": "leve"}})
+    assert ruim.status_code == 400 and not (raiz_temporaria / "config" / "settings.json").exists()
+    r = c.post("/api/assistente/finalizar", headers=H, json={
+        "credenciais": {}, "disciplinas": [{"codigo": "fga0211", "turma": "01", "departamento": 673}],
+        "execucao": {"modo": "matricula", "preset": "leve", "dry_run": True}})
     assert r.status_code == 200
     est = c.get("/api/estado", headers=H).json()
     assert est["primeira_execucao"] is False and est["qtd_disciplinas"] == 1 and est["modo"] == "matricula"
     assert (raiz_temporaria / "config" / "settings.json").exists()
+
+
+# ── Fase 1: validações, lote e carga estimada ───────────────────────────
+
+def test_credenciais_invalidas_sao_apontadas_e_bloqueiam_inicio(web, monkeypatch):
+    e, _, c, _ = web
+    aceitar(c)
+    monkeypatch.setattr(estado_mod, "construir_motor", lambda *a, **k: MotorFalso())
+    r = c.post("/api/credenciais", headers=H, json={**CRED, "cpf": "12345678900", "nascimento": "01022003"})
+    assert r.status_code == 400 and any("CPF inválido" in p for p in r.json()["problemas"])
+    assert e.sessao.sigaa.nascimento == "01/02/2003"  # normalizada mesmo com o CPF errado
+    c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "01", "departamento": 673})
+    r = c.post("/api/execucao/iniciar", headers=H, json={"modo": "monitoramento"})
+    assert r.status_code == 400 and r.json()["ir_para"] == "credenciais"
+    assert not e.status_execucao()["em_execucao"]
+    est = c.get("/api/estado", headers=H).json()
+    assert est["problemas_credenciais"] and est["carga"]["nivel"] in ("baixa", "moderada", "alta")
+
+
+def test_disciplina_duplicada_e_turma_com_letra_recusadas(web):
+    _, _, c, _ = web
+    aceitar(c)
+    assert c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "01", "departamento": 673}).status_code == 200
+    r = c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "01", "departamento": 673, "confirmado": True})
+    assert r.status_code == 400 and "já está cadastrada" in r.json()["erro"]
+    r = c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0212", "turma": "A", "departamento": 673, "confirmado": True})
+    assert r.status_code == 400
+    r = c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "02", "departamento": 673})
+    assert r.status_code == 409 and "mais de uma turma" in r.json()["erro"]
+
+
+def test_cadastro_em_lote(web):
+    e, _, c, _ = web
+    aceitar(c)
+    texto = "FGA0211 01 673\nMAT0025;02;518\nFGA0211 01 673\nlixo"
+    previa = c.post("/api/disciplinas/lote/previa", headers=H, json={"texto": texto}).json()
+    assert previa["validas"] == 2 and previa["invalidas"] == 2 and e.disciplinas == []  # prévia não salva nada
+    r = c.post("/api/disciplinas/lote/aplicar", headers=H, json={"texto": texto})
+    assert r.status_code == 200 and [d["chave"] for d in r.json()["disciplinas"]] == ["FGA0211-01", "MAT0025-02"]
+    # linha com aviso (departamento desconhecido) exige confirmação
+    r = c.post("/api/disciplinas/lote/aplicar", headers=H, json={"texto": "CIC0004 01 99999"})
+    assert r.status_code == 409 and r.json()["precisa_confirmar"]
+    r = c.post("/api/disciplinas/lote/aplicar", headers=H, json={"texto": "CIC0004 01 99999", "confirmado": True})
+    assert r.status_code == 200 and len(e.disciplinas) == 3
+    assert c.post("/api/disciplinas/lote/aplicar", headers=H, json={"texto": "FGA0211 01 673"}).status_code == 400
+    assert c.post("/api/disciplinas/lote/previa", headers=H, json={"texto": "  "}).status_code == 400
+
+
+def test_avancado_informa_presets_e_carga(web):
+    _, _, c, _ = web
+    aceitar(c)
+    a = c.get("/api/avancado", headers=H).json()
+    assert set(a["presets_carga"]) == {"leve", "moderado", "padrao"}
+    assert a["carga"]["preset"] == "padrao" and a["carga"]["nivel"] == "alta"
+    assert a["carga_parametros"]["latencia_seg"] > 0
+
+
+def test_central_nao_repete_a_mesma_vaga(web):
+    e, _, c, _ = web
+    aceitar(c)
+    for _ in range(5):
+        e._ao_evento_motor("vaga_detectada", {"codigo": "FGA0211", "turma": "01", "vagas": 2})
+    e._ao_evento_motor("vaga_detectada", {"codigo": "FGA0211", "turma": "01", "vagas": 3})  # mudou: avisa
+    e._ao_evento_motor("matricula_bloqueada", {"codigo": "FGA0211", "turma": "01"})
+    e._ao_evento_motor("evento_desconhecido", {})
+    eventos = c.get("/api/estado", headers=H).json()["eventos"]
+    assert [ev["tipo"] for ev in eventos] == ["vaga_detectada", "vaga_detectada", "matricula_bloqueada"]
+    assert eventos[1]["texto"].startswith("Vaga encontrada em FGA0211-01 (3")
+
+
+# ── Fase 3: histórico ────────────────────────────────────────────────────
+
+def test_historico_api_filtros_detalhe_comparacao_exportacao(web, raiz_temporaria):
+    from datetime import datetime
+    from app.core import historico
+    from tests.test_historico import _resumo
+    e, _, c, anonimo = web
+    aceitar(c)
+    agora = datetime.now().replace(microsecond=0)
+    historico.registrar_execucao(_resumo("exec-a", agora, vagas=3), {"vagas_series": {"FGA0211-01": [[agora.timestamp(), 2]]}, "pontos": []})
+    historico.registrar_execucao(_resumo("exec-b", agora, alvos=("MAT0025-02",)))
+    h = c.get("/api/historico?dias=30", headers=H).json()
+    assert h["totais"]["execucoes"] == 2 and h["mapa"]["total"] == 1 and "FGA0211-01" in h["disciplinas"]
+    assert [x["id"] for x in c.get("/api/historico?disciplina=MAT0025-02", headers=H).json()["execucoes"]] == ["exec-b"]
+    assert c.get("/api/historico/execucao/exec-a", headers=H).json()["resumo"]["execucao_id"] == "exec-a"
+    assert c.get("/api/historico/execucao/nada", headers=H).status_code == 404
+    assert c.get("/api/historico/execucao/..%2F..%2Fx", headers=H).status_code == 404  # id fora do padrão nem casa a rota
+    comp = c.get("/api/historico/comparar?ids=exec-a,exec-b", headers=H).json()
+    assert len(comp["execucoes"]) == 2
+    assert c.get("/api/historico/comparar?ids=exec-a", headers=H).status_code == 400
+    csv_resp = c.get("/api/historico/exportar?tipo=execucoes&formato=csv", headers=H)
+    assert csv_resp.status_code == 200 and "attachment" in csv_resp.headers["content-disposition"] and "exec-a" in csv_resp.text
+    assert c.get("/api/historico/exportar?tipo=vagas&formato=json", headers=H).json()[0]["vagas"] == 2
+    assert c.get("/api/historico/exportar?tipo=x&formato=csv", headers=H).status_code == 400
+    assert anonimo.get("/api/historico/exportar?tipo=execucoes&formato=csv", headers=H).status_code == 401
+    assert c.post("/api/historico/apagar", headers=H, json={}).status_code == 409
+    assert c.post("/api/historico/apagar", headers=H, json={"confirmado": True}).status_code == 200
+    assert c.get("/api/historico", headers=H).json()["totais"]["execucoes"] == 0
+
+
+def test_historico_nas_configuracoes_avancadas(web):
+    e, _, c, _ = web
+    aceitar(c)
+    corpo = _avancado(c)
+    assert c.get("/api/avancado", headers=H).json()["historico"] == {"ativo": True, "dias_retencao": 180}
+    assert c.post("/api/avancado", headers=H, json={**corpo, "historico": {"ativo": True, "dias_retencao": 99999}}).status_code == 400
+    r = c.post("/api/avancado", headers=H, json={**corpo, "historico": {"ativo": False, "dias_retencao": 30}})
+    assert r.status_code == 200 and e.settings["historico"] == {"ativo": False, "dias_retencao": 30}
+
+
+# ── Fase 4: automação avançada pela Web ──────────────────────────────────
+
+def test_pausar_retomar_janela_e_disciplinas_em_execucao(web, monkeypatch):
+    from app.core import engine
+    from tests.test_engine_fluxo import SigaaSimulado
+    simulado = SigaaSimulado(vagas=0)
+    original = httpx.AsyncClient
+    monkeypatch.setattr(engine.httpx, "AsyncClient", lambda *a, **k: original(*a, **{**k, "transport": httpx.MockTransport(simulado)}))
+    e, _, c, _ = web
+    aceitar(c)
+    c.post("/api/credenciais", headers=H, json=CRED)
+    r = c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "01", "departamento": 673,
+                                                    "grupo": "calculo", "prioridade": "alta"})
+    assert r.json()["disciplinas"][0]["grupo"] == "calculo" and r.json()["disciplinas"][0]["prioridade"] == "alta"
+    e.settings.update({"num_workers": 1, "intervalo_busca": 0.05})
+    janela_ruim = {"ativa": True, "inicio": "99:00", "fim": "07:00", "dias": [0]}
+    r = c.post("/api/execucao/iniciar", headers=H, json={"modo": "monitoramento", "janela": janela_ruim})
+    assert r.status_code == 400 and any("Janela" in p for p in r.json()["problemas"])
+    assert c.post("/api/execucao/pausar", headers=H).status_code == 409  # nada rodando
+
+    r = c.post("/api/execucao/iniciar", headers=H, json={"modo": "monitoramento", "janela": {"ativa": False, "inicio": "07:00",
+                                                                                              "fim": "23:00", "dias": [0]}})
+    assert r.status_code == 200
+    try:
+        for _ in range(200):
+            if e._motor.fase == "monitorando":
+                break
+            time.sleep(0.05)
+        assert c.post("/api/execucao/pausar", headers=H).status_code == 200
+        for _ in range(40):
+            if c.get("/api/estado", headers=H).json()["execucao"]["pausado"]:
+                break
+            time.sleep(0.05)
+        assert c.get("/api/estado", headers=H).json()["execucao"]["pausado"] is True
+        assert c.post("/api/execucao/retomar", headers=H).status_code == 200
+        r = c.post("/api/disciplinas", headers=H, json={"codigo": "FGA0211", "turma": "02", "departamento": 673, "grupo": "calculo"})
+        assert "execução em andamento" in r.json()["mensagem"]
+        for _ in range(100):
+            if "FGA0211-02" in e._motor.alvos_ativos:
+                break
+            time.sleep(0.05)
+        assert "FGA0211-02" in e._motor.alvos_ativos and e._motor.meta_alvos["FGA0211-02"]["grupo"] == "calculo"
+        c.post("/api/disciplinas/1/alternar", headers=H, json={"chave": "FGA0211-02"})  # desativar = sair da busca
+        for _ in range(100):
+            if "FGA0211-02" not in e._motor.alvos_ativos:
+                break
+            time.sleep(0.05)
+        assert "FGA0211-02" not in e._motor.alvos_ativos
+    finally:
+        c.post("/api/execucao/parar", headers=H)
+        for _ in range(200):
+            if not e.status_execucao()["em_execucao"]:
+                break
+            time.sleep(0.05)
+    assert e.settings["verificacao_previa"] is True  # padrão: verifica antes de começar
+    est = c.get("/api/estado", headers=H).json()
+    assert est["grupos"] == ["calculo"] and est["janela"]["inicio"] == "07:00"

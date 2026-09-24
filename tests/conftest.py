@@ -21,7 +21,8 @@ def raiz_temporaria(tmp_path, monkeypatch):
     import app.utils.paths as paths
     monkeypatch.setattr(paths, "raiz_projeto", lambda: str(tmp_path))
     # Sessão de credenciais é um singleton de processo — zera entre testes.
-    from app.core import credentials
+    from app.core import credentials, historico
     credentials.encerrar_sessao()
+    monkeypatch.setattr(historico, "_importacao_feita", False)  # cada teste é uma "sessão" nova
     yield tmp_path
     credentials.encerrar_sessao()

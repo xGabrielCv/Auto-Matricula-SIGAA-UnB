@@ -7,6 +7,7 @@
   <title>SIGAA Sniper</title>
   <link rel="icon" href="/static/icone.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/graficos.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -31,6 +32,7 @@
           <li><button type="button" data-tela="execucao"><span aria-hidden="true">▶️</span> Execução</button></li>
           <li><button type="button" data-tela="dashboard"><span aria-hidden="true">📊</span> Dashboard</button></li>
           <li><button type="button" data-tela="logs"><span aria-hidden="true">📜</span> Logs</button></li>
+          <li><button type="button" data-tela="historico"><span aria-hidden="true">🗂️</span> Histórico</button></li>
           <li class="menu-separador" aria-hidden="true"></li>
           <li><button type="button" data-tela="credenciais"><span aria-hidden="true">🔑</span> Credenciais</button></li>
           <li><button type="button" data-tela="disciplinas"><span aria-hidden="true">📚</span> Disciplinas</button></li>
@@ -45,6 +47,7 @@
       </nav>
       <div class="barra-lateral-rodape">
         <button type="button" class="botao botao-fantasma botao-bloco" id="botao-tema" aria-label="Alternar tema claro/escuro">🌓 Tema</button>
+        <button type="button" class="botao botao-fantasma botao-bloco" id="botao-exibicao">🔠 Exibição</button>
         <button type="button" class="botao botao-perigo-contorno botao-bloco" id="botao-encerrar">⏻ Encerrar</button>
       </div>
     </aside>
@@ -54,10 +57,22 @@
       <header class="topo">
         <button type="button" class="botao botao-fantasma botao-menu" id="botao-menu" aria-label="Abrir menu" aria-expanded="false" aria-controls="barra-lateral">☰</button>
         <h1 class="topo-titulo" id="titulo-tela">Execução</h1>
+        <button type="button" class="botao botao-secundario botao-pequeno botao-paleta" id="botao-paleta" aria-haspopup="dialog" aria-keyshortcuts="Control+K" title="Buscar uma ação ou tela (Ctrl+K)">
+          <span aria-hidden="true">🔎</span><span class="rotulo-paleta">Ações</span><kbd aria-hidden="true">Ctrl K</kbd>
+        </button>
+        <button type="button" class="botao botao-fantasma sino" id="botao-sino" aria-haspopup="dialog" aria-label="Central de notificações">
+          <span aria-hidden="true">🔔</span><span class="contador" id="sino-contador" hidden>0</span>
+        </button>
+        <span class="selo selo-demo" id="selo-demo" hidden>🎓 DEMONSTRAÇÃO · SIGAA simulado</span>
         <div class="status-execucao" id="status-execucao" role="status" aria-live="polite">
           <span class="ponto"></span><span class="status-texto">Parado</span>
         </div>
       </header>
+
+      <div class="faixa-conexao" id="faixa-conexao" role="status" aria-live="polite" hidden>
+        <span class="giro" aria-hidden="true"></span><span id="faixa-conexao-texto">Reconectando…</span>
+      </div>
+      <div id="anuncio-urgente" class="visualmente-oculto" role="alert" aria-live="assertive"></div>
 
       <div id="faixas"></div>
 
@@ -101,8 +116,35 @@
               </div>
               <p class="dica">Deixe em branco para começar imediatamente.</p>
 
+              <h3>Encerrar automaticamente <span class="texto-suave">(opcional)</span></h3>
+              <div class="campo-linha">
+                <label for="exec-fim" class="rotulo-visivel">Data e hora</label>
+                <input type="datetime-local" id="exec-fim" step="1">
+                <button type="button" class="botao botao-fantasma" id="exec-fim-limpar">Limpar</button>
+              </div>
+
+              <details class="opcoes-extras" id="exec-mais">
+                <summary>Janela diária, relógio do SIGAA e verificação prévia</summary>
+                <label class="interruptor"><input type="checkbox" id="exec-janela-ativa"><span class="interruptor-trilho" aria-hidden="true"></span>
+                  <span><strong>Rodar só numa janela diária</strong> — fora dela as buscas pausam sozinhas e voltam no próximo horário</span></label>
+                <div class="campo-linha janela-horarios">
+                  <label for="exec-janela-inicio" class="rotulo-visivel">Das</label><input type="time" id="exec-janela-inicio">
+                  <label for="exec-janela-fim" class="rotulo-visivel">às</label><input type="time" id="exec-janela-fim">
+                </div>
+                <fieldset class="dias-semana" id="exec-janela-dias"><legend class="rotulo-visivel">Dias</legend></fieldset>
+                <label class="caixa"><input type="checkbox" id="exec-relogio"> Agendar pelo relógio do SIGAA (corrige a diferença do relógio deste computador)</label>
+                <label class="caixa"><input type="checkbox" id="exec-verificacao"> Verificar login e disciplinas antes de começar (recomendado)</label>
+              </details>
+
+              <label class="interruptor bloco-demo">
+                <input type="checkbox" id="exec-demo">
+                <span class="interruptor-trilho" aria-hidden="true"></span>
+                <span><strong>🎓 Modo demonstração</strong> — roda contra um SIGAA simulado neste computador, sem login e sem tocar no SIGAA. Vagas aparecem ao acaso; sempre em DRY RUN; nada vai para o histórico.</span>
+              </label>
+
               <div class="acoes">
                 <button type="button" class="botao botao-primario botao-grande" id="botao-iniciar">▶️ Iniciar</button>
+                <button type="button" class="botao botao-secundario botao-grande" id="botao-pausar" disabled>⏸️ Pausar</button>
                 <button type="button" class="botao botao-secundario botao-grande" id="botao-parar" disabled>⏹️ Parar</button>
               </div>
               <p class="status-grande" id="exec-status">Parado.</p>
@@ -116,36 +158,155 @@
           </div>
         </section>
 
-        <!-- 📊 DASHBOARD -->
+        <!-- 📊 DASHBOARD — Centro de Operações (Fase 2) -->
         <section class="tela" id="tela-dashboard" data-titulo="Dashboard" hidden>
           <div class="barra-acoes">
             <span class="selo" id="dash-saude">—</span>
+            <span class="texto-suave" id="dash-fase" aria-live="polite"></span>
             <span class="espaco"></span>
-            <button type="button" class="botao botao-fantasma" data-ir-para="logs">📜 Ver logs</button>
+            <button type="button" class="botao botao-secundario botao-pequeno" id="dash-pausar" hidden>⏸️ Pausar</button>
+            <button type="button" class="botao botao-secundario botao-pequeno" id="dash-parar" hidden>⏹️ Parar</button>
+            <button type="button" class="botao botao-fantasma botao-pequeno" id="dash-ver-resumo" hidden>📋 Resumo da execução</button>
+            <button type="button" class="botao botao-fantasma botao-pequeno" data-ir-para="logs">📜 Ver logs</button>
           </div>
-          <div class="grade-cards" id="dash-cards"></div>
-          <p class="alerta alerta-erro" id="dash-alerta" hidden></p>
-          <div class="cartao">
-            <h2>Workers</h2>
-            <div class="tabela-rolavel">
-              <table class="tabela" aria-describedby="dash-workers-vazio">
-                <thead><tr><th scope="col">Worker</th><th scope="col">Erros</th><th scope="col">Buscas</th><th scope="col">Última ação</th><th scope="col">Latência</th><th scope="col">Ocioso</th></tr></thead>
-                <tbody id="dash-workers"></tbody>
-              </table>
-            </div>
-            <p class="vazio" id="dash-workers-vazio">Nenhum worker ativo ainda — inicie uma execução.</p>
+          <div class="barra-progresso" id="dash-progresso" hidden><div class="barra-progresso-valor" id="dash-progresso-valor"></div></div>
+
+          <div class="abas" role="tablist" aria-label="Seções do dashboard" id="dash-abas">
+            <button type="button" role="tab" id="aba-dash-geral" aria-controls="painel-dash-geral" aria-selected="true" data-aba="geral">Visão geral</button>
+            <button type="button" role="tab" id="aba-dash-graficos" aria-controls="painel-dash-graficos" aria-selected="false" data-aba="graficos">Gráficos</button>
+            <button type="button" role="tab" id="aba-dash-workers" aria-controls="painel-dash-workers" aria-selected="false" data-aba="workers">Workers</button>
+            <button type="button" role="tab" id="aba-dash-tempo" aria-controls="painel-dash-tempo" aria-selected="false" data-aba="tempo">Linha do tempo</button>
           </div>
-          <div class="grade-2">
+
+          <!-- Visão geral -->
+          <div role="tabpanel" id="painel-dash-geral" aria-labelledby="aba-dash-geral">
+            <div class="grade-cards" id="dash-cards"></div>
+            <p class="alerta alerta-erro" id="dash-alerta" hidden></p>
+            <ul class="lista-alertas" id="dash-alertas-limiar" aria-live="polite" hidden></ul>
+
             <div class="cartao">
               <div class="cartao-cabecalho">
-                <h2>Eventos recentes de vagas</h2>
-                <button type="button" class="botao botao-fantasma botao-pequeno" id="dash-historico">📈 Histórico por disciplina</button>
+                <h2>Disciplinas</h2>
+                <span class="texto-suave" id="dash-alvos-legenda">Estado de cada disciplina nesta execução.</span>
               </div>
-              <ul class="lista-eventos" id="dash-vagas"></ul>
+              <div class="grade-alvos" id="dash-alvos"></div>
+              <p class="vazio" id="dash-alvos-vazio">Inicie uma execução para acompanhar cada disciplina aqui.</p>
             </div>
+
+            <div class="cartao" id="dash-tentativas-cartao" hidden>
+              <div class="cartao-cabecalho">
+                <h2>Tentativas de matrícula</h2>
+                <span class="texto-suave">Cada etapa com o tempo desde o início da tentativa (mais recente primeiro).</span>
+              </div>
+              <div class="tabela-rolavel">
+                <table class="tabela">
+                  <thead><tr><th scope="col">Hora</th><th scope="col">Disciplina</th><th scope="col">Worker</th><th scope="col">Resultado</th><th scope="col" class="num">Da vaga ao resultado</th><th scope="col">Etapas</th></tr></thead>
+                  <tbody id="dash-tentativas"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="grade-2">
+              <div class="cartao">
+                <h2>Saúde da conexão</h2>
+                <p id="dash-saude-causa" class="saude-causa"></p>
+                <dl class="indicadores" id="dash-saude-indicadores"></dl>
+              </div>
+              <div class="cartao">
+                <div class="cartao-cabecalho">
+                  <h2>Erros por tipo</h2>
+                  <span class="texto-suave">nesta execução</span>
+                </div>
+                <div class="tabela-rolavel">
+                  <table class="tabela">
+                    <thead><tr><th scope="col">Tipo</th><th scope="col" class="num">Qtd.</th><th scope="col">Última</th><th scope="col">O que fazer</th></tr></thead>
+                    <tbody id="dash-erros-grupos"></tbody>
+                  </table>
+                </div>
+                <p class="vazio" id="dash-erros-grupos-vazio">Nenhum erro nesta execução.</p>
+              </div>
+            </div>
+
+            <div class="grade-2">
+              <div class="cartao">
+                <div class="cartao-cabecalho">
+                  <h2>Eventos recentes de vagas</h2>
+                  <button type="button" class="botao botao-fantasma botao-pequeno" id="dash-historico">📈 Histórico por disciplina</button>
+                </div>
+                <ul class="lista-eventos" id="dash-vagas"></ul>
+              </div>
+              <div class="cartao">
+                <h2>Erros recentes</h2>
+                <ul class="lista-eventos lista-erros" id="dash-erros"></ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Gráficos -->
+          <div role="tabpanel" id="painel-dash-graficos" aria-labelledby="aba-dash-graficos" hidden>
+            <div class="filtros-graficos" role="group" aria-label="Período dos gráficos">
+              <span class="rotulo-visivel">Período</span>
+              <div class="segmentado" id="dash-janela">
+                <button type="button" data-janela="300" aria-pressed="true">5 min</button>
+                <button type="button" data-janela="900" aria-pressed="false">15 min</button>
+                <button type="button" data-janela="3600" aria-pressed="false">1 hora</button>
+                <button type="button" data-janela="0" aria-pressed="false">Execução inteira</button>
+              </div>
+              <span class="texto-suave" id="dash-graficos-nota"></span>
+            </div>
+            <div class="grade-2 grade-graficos">
+              <figure class="cartao grafico" id="graf-latencia" data-titulo="Tempo de resposta do SIGAA">
+                <figcaption><h2>Tempo de resposta do SIGAA</h2><p class="texto-suave">Mediana (p50) e 95º percentil por intervalo, em ms. Uma subida gradual mostra quando o SIGAA começou a ficar lento.</p></figcaption>
+              </figure>
+              <figure class="cartao grafico" id="graf-rps" data-titulo="Buscas por segundo">
+                <figcaption><h2>Buscas por segundo</h2><p class="texto-suave">Quantas consultas o programa fez ao SIGAA. Queda brusca com o motor rodando indica problema.</p></figcaption>
+              </figure>
+              <figure class="cartao grafico" id="graf-vagas" data-titulo="Vagas por disciplina">
+                <figcaption><h2>Vagas por disciplina</h2><p class="texto-suave">Quantidade de vagas vista em cada leitura — mostra quando vagas abrem e quanto tempo duram.</p></figcaption>
+              </figure>
+              <figure class="cartao grafico" id="graf-erros" data-titulo="Erros por tipo ao longo do tempo">
+                <figcaption><h2>Erros por tipo ao longo do tempo</h2><p class="texto-suave">Picos simultâneos em todos os workers costumam ser instabilidade do SIGAA; erros de rede isolados, da sua conexão.</p></figcaption>
+              </figure>
+              <figure class="cartao grafico" id="graf-histograma" data-titulo="Distribuição do tempo de resposta">
+                <figcaption><h2>Distribuição do tempo de resposta</h2><p class="texto-suave">Quantas respostas caíram em cada faixa de tempo (em milissegundos). Uma cauda longa à direita explica timeouts mesmo com média boa — útil para ajustar o timeout.</p></figcaption>
+              </figure>
+            </div>
+          </div>
+
+          <!-- Linha do tempo -->
+          <div role="tabpanel" id="painel-dash-tempo" aria-labelledby="aba-dash-tempo" hidden>
+            <div class="filtros-graficos" role="group" aria-label="Filtros da linha do tempo">
+              <label class="rotulo-linha"><span class="rotulo-visivel">Execução</span> <select id="lt-execucao"></select></label>
+              <div class="segmentado" id="lt-periodo" role="group" aria-label="Trecho da execução">
+                <button type="button" data-periodo="0" aria-pressed="true">Execução inteira</button>
+                <button type="button" data-periodo="3600" aria-pressed="false">Última hora</button>
+                <button type="button" data-periodo="900" aria-pressed="false">Últimos 15 min</button>
+              </div>
+              <span class="espaco"></span>
+              <button type="button" class="botao botao-fantasma botao-pequeno" id="lt-atualizar">↻ Atualizar</button>
+            </div>
+            <div class="chips" id="lt-categorias" role="group" aria-label="Tipos de evento mostrados"></div>
             <div class="cartao">
-              <h2>Erros recentes</h2>
-              <ul class="lista-eventos lista-erros" id="dash-erros"></ul>
+              <p class="texto-suave" id="lt-resumo"></p>
+              <ol class="linha-tempo" id="lt-itens"></ol>
+              <p class="vazio" id="lt-vazio" hidden></p>
+            </div>
+          </div>
+
+          <!-- Workers -->
+          <div role="tabpanel" id="painel-dash-workers" aria-labelledby="aba-dash-workers" hidden>
+            <figure class="cartao grafico" id="graf-workers" data-titulo="Falhas por worker">
+              <figcaption><h2>Falhas por worker</h2><p class="texto-suave">Por tipo de falha. Um worker com muito mais falhas que os outros aponta problema nele; falhas em todos, excesso de workers ou SIGAA instável. As buscas bem-sucedidas estão na tabela abaixo.</p></figcaption>
+            </figure>
+            <div class="cartao">
+              <h2>Workers</h2>
+              <div class="tabela-rolavel">
+                <table class="tabela" aria-describedby="dash-workers-vazio">
+                  <thead><tr><th scope="col">Worker</th><th scope="col">Estado</th><th scope="col">Disciplina</th><th scope="col" class="num">Buscas</th><th scope="col" class="num">Erros</th><th scope="col" class="num">Relogins</th><th scope="col">Latência</th><th scope="col">Sem progresso</th></tr></thead>
+                  <tbody id="dash-workers"></tbody>
+                </table>
+              </div>
+              <p class="vazio" id="dash-workers-vazio">Nenhum worker ativo ainda — inicie uma execução.</p>
             </div>
           </div>
         </section>
@@ -165,6 +326,7 @@
               <span class="espaco"></span>
               <button type="button" class="botao botao-fantasma botao-pequeno" id="log-limpar">🧹 Limpar tela</button>
               <button type="button" class="botao botao-fantasma botao-pequeno" id="log-abrir">📂 Abrir arquivo completo</button>
+              <button type="button" class="botao botao-fantasma botao-pequeno" id="log-exportar-csv">📊 Exportar filtrados (CSV)</button>
               <a class="botao botao-fantasma botao-pequeno" id="log-baixar" href="#">⬇️ Baixar</a>
             </div>
             <div class="logs-layout">
@@ -173,7 +335,7 @@
                   <thead><tr><th scope="col">Hora</th><th scope="col">Worker</th><th scope="col">Categoria</th><th scope="col">Nível</th><th scope="col">Evento</th></tr></thead>
                   <tbody id="log-linhas"></tbody>
                 </table>
-                <p class="vazio" id="log-vazio">Nenhum evento para mostrar.</p>
+                <p class="vazio" id="log-vazio">Nenhum evento nesta sessão ainda — eles aparecem quando uma execução começa. Execuções anteriores ficam na tela Histórico (ou ligue "Carregar dados da última execução ao abrir" em Config. Avançadas).</p>
               </div>
               <div class="logs-detalhes" aria-live="polite">
                 <h2>Detalhes</h2>
@@ -182,6 +344,115 @@
                 <pre id="log-detalhe-tecnico" class="bloco-codigo" hidden></pre>
               </div>
             </div>
+          </div>
+        </section>
+
+        <!-- 🗂️ HISTÓRICO (Fase 3) -->
+        <section class="tela" id="tela-historico" data-titulo="Histórico" hidden>
+          <div class="filtros-graficos nao-imprimir">
+            <span class="rotulo-visivel">Período</span>
+            <div class="segmentado" id="hist-periodo" role="group" aria-label="Período do histórico">
+              <button type="button" data-dias="7" aria-pressed="false">7 dias</button>
+              <button type="button" data-dias="30" aria-pressed="true">30 dias</button>
+              <button type="button" data-dias="90" aria-pressed="false">90 dias</button>
+              <button type="button" data-dias="0" aria-pressed="false">Tudo</button>
+            </div>
+            <label class="rotulo-visivel" for="hist-disciplina">Disciplina</label>
+            <select id="hist-disciplina" class="select-compacto"><option value="">Todas</option></select>
+            <span class="espaco"></span>
+            <div class="menu-exportar">
+              <button type="button" class="botao botao-secundario botao-pequeno" id="hist-exportar" aria-haspopup="true" aria-expanded="false">⬇️ Exportar</button>
+              <div class="lista" id="hist-exportar-lista" hidden>
+                <button type="button" data-tipo="execucoes" data-formato="csv">Execuções — planilha (CSV)</button>
+                <button type="button" data-tipo="execucoes" data-formato="json">Execuções — JSON</button>
+                <button type="button" data-tipo="vagas" data-formato="csv">Leituras de vagas — planilha (CSV)</button>
+                <button type="button" data-tipo="vagas" data-formato="json">Leituras de vagas — JSON</button>
+              </div>
+            </div>
+          </div>
+          <p class="alerta alerta-aviso" id="hist-desativado" hidden>O histórico está desligado em Config. Avançadas — novas execuções não estão sendo gravadas.</p>
+          <div class="grade-cards" id="hist-cards"></div>
+
+          <div class="grade-2">
+            <figure class="cartao grafico" id="graf-hist-vagas" data-titulo="Vagas vistas por dia">
+              <figcaption><h2>Vagas vistas por dia</h2><p class="texto-suave">Leituras em que o SIGAA mostrou vaga. Dias com mais vagas indicam quando vale a pena monitorar.</p></figcaption>
+            </figure>
+            <figure class="cartao grafico" id="graf-hist-horas" data-titulo="Horas monitoradas por dia">
+              <figcaption><h2>Horas monitoradas por dia</h2><p class="texto-suave">Quanto tempo o programa passou buscando — compare com as vagas vistas para medir se o esforço está rendendo.</p></figcaption>
+            </figure>
+          </div>
+          <figure class="cartao grafico" id="graf-hist-mapa" data-titulo="Quando as vagas abrem">
+            <figcaption><h2>Quando as vagas abrem</h2><p class="texto-suave">Quantas vezes uma vaga surgiu (passou de 0 para 1 ou mais) em cada dia da semana e hora, no período escolhido. É estatística do seu histórico, não garantia — mas ajuda a agendar o monitoramento para as janelas úteis e reduzir buscas no resto do tempo.</p></figcaption>
+          </figure>
+
+          <div class="cartao">
+            <div class="cartao-cabecalho">
+              <h2>Execuções</h2>
+              <div class="acoes acoes-compactas">
+                <button type="button" class="botao botao-secundario botao-pequeno" id="hist-comparar" disabled>⚖️ Comparar selecionadas</button>
+                <button type="button" class="botao botao-perigo-contorno botao-pequeno" id="hist-apagar">🗑️ Apagar histórico</button>
+              </div>
+            </div>
+            <p class="dica">Marque duas execuções para comparar. Clique em "Ver" para o relatório completo.</p>
+            <div class="tabela-rolavel">
+              <table class="tabela tabela-historico">
+                <thead><tr><th scope="col"><span class="visualmente-oculto">Selecionar</span></th><th scope="col">Início</th><th scope="col">Duração</th><th scope="col">Modo</th><th scope="col">Fim</th><th scope="col" class="num">Buscas</th><th scope="col" class="num">Vagas vistas</th><th scope="col" class="num">Resultado</th><th scope="col" class="num">Erros</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
+                <tbody id="hist-linhas"></tbody>
+              </table>
+            </div>
+            <p class="vazio" id="hist-vazio">Nenhuma execução no período. Cada execução encerrada entra aqui automaticamente.</p>
+          </div>
+
+          <div class="cartao" id="hist-comparacao" hidden>
+            <div class="cartao-cabecalho"><h2>Comparação</h2><button type="button" class="botao botao-fantasma botao-pequeno nao-imprimir" data-fechar="hist-comparacao">Fechar</button></div>
+            <div class="tabela-rolavel"><table class="tabela comparacao" id="hist-comparacao-tabela"></table></div>
+            <figure class="grafico" id="graf-hist-comparacao" data-titulo="Tempo de resposta ao longo da execução">
+              <figcaption><h3>Tempo de resposta ao longo da execução</h3><p class="texto-suave">Mediana por minuto, alinhada pelo início de cada execução — mostra se uma configuração deixou o SIGAA mais lento que a outra.</p></figcaption>
+            </figure>
+          </div>
+
+          <div class="cartao" id="hist-detalhe" hidden>
+            <div class="cabecalho-impressao"><strong>SIGAA Sniper — relatório de execução</strong></div>
+            <div class="cartao-cabecalho">
+              <h2 id="hist-detalhe-titulo">Execução</h2>
+              <div class="acoes acoes-compactas nao-imprimir">
+                <button type="button" class="botao botao-secundario botao-pequeno" id="hist-imprimir">🖨️ Imprimir / salvar PDF</button>
+                <button type="button" class="botao botao-fantasma botao-pequeno" data-fechar="hist-detalhe">Fechar</button>
+              </div>
+            </div>
+            <div id="hist-detalhe-conteudo"></div>
+            <div class="grade-2">
+              <figure class="grafico" id="graf-hist-det-latencia" data-titulo="Tempo de resposta por minuto">
+                <figcaption><h3>Tempo de resposta por minuto</h3></figcaption>
+              </figure>
+              <figure class="grafico" id="graf-hist-det-vagas" data-titulo="Vagas por disciplina">
+                <figcaption><h3>Vagas por disciplina</h3></figcaption>
+              </figure>
+            </div>
+          </div>
+
+          <div class="cartao nao-imprimir">
+            <div class="cartao-cabecalho">
+              <h2>🕐 Horários em que as vagas costumam surgir</h2>
+              <span class="texto-suave" id="janelas-legenda">Por disciplina, nos últimos 14 dias (ou no período escolhido acima).</span>
+            </div>
+            <p class="dica">Estatística do seu próprio histórico, nunca garantia: vagas podem surgir em qualquer horário. Usar a janela sugerida reduz as horas de execução e a carga no SIGAA.</p>
+            <ul class="lista-janelas" id="janelas-lista"></ul>
+            <p class="vazio" id="janelas-vazio">Ainda não há aberturas de vaga no histórico deste período.</p>
+          </div>
+
+          <div class="cartao nao-imprimir">
+            <div class="cartao-cabecalho">
+              <h2>🧾 Ações registradas</h2>
+              <span class="texto-suave">O que foi feito e quando: aceite do aviso legal (com a versão do texto), início e parada, mudanças de configuração, perfis… Nunca guarda senha, CPF ou tokens.</span>
+            </div>
+            <div class="tabela-rolavel tabela-curta">
+              <table class="tabela">
+                <thead><tr><th scope="col">Quando</th><th scope="col">Ação</th><th scope="col">Detalhe</th><th scope="col">Onde</th></tr></thead>
+                <tbody id="auditoria-lista"></tbody>
+              </table>
+            </div>
+            <p class="vazio" id="auditoria-vazio">Nenhuma ação registrada ainda.</p>
           </div>
         </section>
 
@@ -211,15 +482,22 @@
           <div class="cartao">
             <div class="cartao-cabecalho">
               <p class="texto-suave">O robô atira em todas as disciplinas ativas ao mesmo tempo.</p>
-              <button type="button" class="botao botao-primario" id="disc-adicionar">➕ Adicionar</button>
+              <div class="acoes acoes-compactas">
+                <button type="button" class="botao botao-secundario" id="disc-lote">📋 Adicionar várias</button>
+                <button type="button" class="botao botao-primario" id="disc-adicionar">➕ Adicionar</button>
+              </div>
             </div>
             <div class="tabela-rolavel">
               <table class="tabela">
-                <thead><tr><th scope="col">Código</th><th scope="col">Turma</th><th scope="col">Departamento</th><th scope="col">Professor</th><th scope="col">Ativa?</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
+                <thead><tr><th scope="col">Código</th><th scope="col">Turma</th><th scope="col">Departamento</th><th scope="col">Professor</th><th scope="col">Grupo</th><th scope="col">Prioridade</th><th scope="col">Ativa?</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
                 <tbody id="disc-linhas"></tbody>
               </table>
             </div>
             <p class="vazio" id="disc-vazio">Nenhuma disciplina cadastrada ainda.</p>
+            <div class="rodape-cartao">
+              <span class="texto-suave" id="depto-info"></span>
+              <button type="button" class="botao botao-fantasma botao-pequeno" id="depto-atualizar">🔄 Atualizar lista de departamentos</button>
+            </div>
           </div>
         </section>
 
@@ -259,15 +537,56 @@
                 </div>
               </fieldset>
             </div>
+            <div class="grade-3">
+              <fieldset class="cartao">
+                <legend>🪟 Notificação do Windows</legend>
+                <label class="interruptor"><input type="checkbox" name="windows_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Mostrar um aviso na área de notificações do Windows</span></label>
+                <p class="dica" id="notif-windows-dica">Não precisa configurar nada. Respeita o "Não perturbe" do Windows.</p>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="windows">Enviar teste</button>
+                </div>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>🔗 Webhook (Discord, Slack…)</legend>
+                <label class="interruptor"><input type="checkbox" name="webhook_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Enviar para um webhook</span></label>
+                <label>Formato<select name="webhook_formato"><option value="discord">Discord</option><option value="slack">Slack</option><option value="json">JSON genérico</option></select></label>
+                <label>URL do webhook<input name="webhook_url" type="password" autocomplete="off" placeholder="https://…"></label>
+                <p class="dica">Envia os avisos para um canal seu. A URL funciona como uma senha do canal: é tratada como segredo e nunca vai para logs.</p>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" data-ajuda="webhook">Como configurar?</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="webhook">Enviar teste</button>
+                </div>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>✉️ E-mail</legend>
+                <label class="interruptor"><input type="checkbox" name="email_ativo"><span class="interruptor-trilho" aria-hidden="true"></span><span>Enviar por e-mail</span></label>
+                <label>Servidor SMTP<input name="email.servidor" autocomplete="off" placeholder="smtp.gmail.com"></label>
+                <div class="linha-form">
+                  <label class="expandir">Segurança<select name="email.seguranca"><option value="starttls">STARTTLS (porta 587)</option><option value="ssl">SSL/TLS (porta 465)</option></select></label>
+                  <label>Porta<input name="email.porta" type="number" min="1" max="65535"></label>
+                </div>
+                <label>Usuário (seu e-mail)<input name="email.usuario" autocomplete="off"></label>
+                <label>Senha<input name="email_senha" type="password" autocomplete="new-password"></label>
+                <p class="dica" id="notif-email-senha-dica" hidden>Senha já informada — deixe em branco para mantê-la.</p>
+                <label>Enviar para<input name="email.destinatario" autocomplete="off"></label>
+                <label>Remetente (opcional — em branco usa o usuário)<input name="email.remetente" autocomplete="off"></label>
+                <p class="dica">Gmail e Outlook exigem uma "senha de app". A senha nunca vai para logs nem relatórios.</p>
+                <div class="acoes acoes-compactas">
+                  <button type="button" class="botao botao-fantasma botao-pequeno" data-ajuda="email">Como configurar?</button>
+                  <button type="button" class="botao botao-secundario botao-pequeno" data-testar="email">Enviar teste</button>
+                </div>
+              </fieldset>
+            </div>
             <div class="grade-2">
               <fieldset class="cartao">
                 <legend>Quais eventos notificar</legend>
                 <div id="notif-eventos" class="lista-checks"></div>
+                <label>Resumo periódico a cada (horas)<input name="resumo_intervalo_horas" type="number" min="0.5" max="48" step="0.5"></label>
               </fieldset>
               <fieldset class="cartao">
                 <legend>Salvar dados de notificação neste computador</legend>
-                <p class="alerta alerta-aviso">⚠️ Por padrão, o token do Telegram e o tópico do ntfy também são só de memória (como as credenciais do SIGAA). Se marcar a opção abaixo, eles serão gravados em texto simples (não criptografado) em <code>config/notificacoes.secrets.json</code>, só para não precisar redigitar toda vez.</p>
-                <label class="caixa"><input type="checkbox" name="lembrar" id="notif-lembrar"> Salvar neste computador (arquivo não criptografado)</label>
+                <p class="alerta alerta-aviso">⚠️ Por padrão, os segredos de notificação (token do Telegram, tópico do ntfy, URL do webhook, senha do e-mail) também são só de memória, como as credenciais do SIGAA. Se marcar a opção abaixo, eles serão guardados em <code>config/notificacoes.secrets.json</code> — <span id="notif-cofre-texto">cifrados com a sua conta do Windows</span> — só para não precisar redigitar toda vez.</p>
+                <label class="caixa"><input type="checkbox" name="lembrar" id="notif-lembrar"> Salvar neste computador</label>
               </fieldset>
             </div>
             <div class="acoes">
@@ -285,13 +604,25 @@
             <div class="grade-2">
               <fieldset class="cartao">
                 <legend>Desempenho</legend>
+                <label><span class="rotulo-linha">Perfil de carga <button type="button" class="ajuda-mini" data-ajuda="avancado_carga" aria-label="Ajuda: perfil de carga">?</button></span>
+                  <select name="preset_carga" id="avancado-preset"></select></label>
                 <label><span class="rotulo-linha">Quantidade de workers <button type="button" class="ajuda-mini" data-ajuda="avancado_workers" aria-label="Ajuda: workers">?</button></span><input name="num_workers" type="number" min="1" max="100"></label>
                 <label><span class="rotulo-linha">Intervalo entre buscas (segundos) <button type="button" class="ajuda-mini" data-ajuda="avancado_intervalo" aria-label="Ajuda: intervalo">?</button></span><input name="intervalo_busca" type="number" min="0.05" max="60" step="0.05"></label>
                 <label><span class="rotulo-linha">Timeout de requisição (segundos) <button type="button" class="ajuda-mini" data-ajuda="avancado_timeout" aria-label="Ajuda: timeout">?</button></span><input name="timeout_req" type="number" min="1" max="120"></label>
+                <p class="carga-estimada" id="avancado-carga" aria-live="polite"></p>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>🧯 Proteção de carga</legend>
+                <label><span class="rotulo-linha">Teto de buscas por segundo (0 = sem teto) <button type="button" class="ajuda-mini" data-ajuda="avancado_protecao" aria-label="Ajuda: proteção de carga">?</button></span>
+                  <input name="protecao.limite_req_por_seg" type="number" min="0" max="200" step="1"></label>
+                <label>Logins simultâneos no CAS<input name="protecao.logins_simultaneos" type="number" min="1" max="20"></label>
+                <label class="caixa"><input type="checkbox" name="protecao.disjuntor"> Pausar automaticamente quando o SIGAA ficar instável (disjuntor)</label>
               </fieldset>
               <fieldset class="cartao">
                 <legend>Execução</legend>
                 <label class="caixa"><input type="checkbox" name="abrir_dashboard_ao_iniciar"> Abrir dashboard automaticamente ao iniciar <button type="button" class="ajuda-mini" data-ajuda="avancado_dashboard_auto" aria-label="Ajuda: dashboard">?</button></label>
+                <label class="caixa"><input type="checkbox" name="carregar_ultima_execucao"> Carregar dados da última execução ao abrir <button type="button" class="ajuda-mini" data-ajuda="avancado_carregar_ultima" aria-label="Ajuda: carregar última execução">?</button></label>
+                <button type="button" class="botao botao-secundario botao-pequeno alinhar-inicio" id="avancado-assistente">🧭 Refazer a configuração inicial</button>
                 <label><span class="rotulo-linha">Nível de log no console <button type="button" class="ajuda-mini" data-ajuda="avancado_debug" aria-label="Ajuda: nível de log">?</button></span>
                   <select name="nivel_log_console"><option>INFO</option><option>DEBUG</option></select></label>
               </fieldset>
@@ -310,7 +641,24 @@
                 <label>Endereço (host)<input name="web.host" autocomplete="off"></label>
                 <label>Porta<input name="web.porta" type="number" min="1024" max="65535"></label>
                 <label class="caixa"><input type="checkbox" name="web.abrir_navegador"> Abrir o navegador automaticamente</label>
+                <label class="caixa"><input type="checkbox" name="web.modo_aplicativo"> Abrir em janela própria (modo aplicativo, sem barra de endereço)</label>
+                <label>Encerrar a sessão após (minutos sem uso, 0 = nunca)<input name="web.expirar_inatividade_min" type="number" min="0" max="720"></label>
                 <p class="dica">Mudanças valem na próxima vez que a Interface Web for aberta. Mantenha <code>127.0.0.1</code> para que só este computador tenha acesso.</p>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>🔔 Alertas de problema</legend>
+                <label class="caixa"><input type="checkbox" name="alertas.ativo"> Avisar quando algo parecer errado durante a execução</label>
+                <label>Taxa de erro acima de (%)<input name="alertas.taxa_erro_pct" type="number" min="5" max="100"></label>
+                <label>…sustentada por (minutos)<input name="alertas.taxa_erro_min" type="number" min="1" max="60"></label>
+                <label>SIGAA sem responder por (minutos)<input name="alertas.sem_resposta_min" type="number" min="1" max="120"></label>
+                <label>Nenhuma busca por (minutos)<input name="alertas.sem_busca_min" type="number" min="1" max="120"></label>
+                <p class="dica">Os alertas aparecem no Dashboard e na central de avisos; para recebê-los no Telegram/ntfy, marque "Alertas de problema" em Notificações. Nunca disparam com a execução pausada.</p>
+              </fieldset>
+              <fieldset class="cartao">
+                <legend>🗂️ Histórico de execuções</legend>
+                <label class="caixa"><input type="checkbox" name="historico.ativo"> Gravar cada execução no histórico (<code>data/historico.db</code>)</label>
+                <label>Guardar por quantos dias (0 = para sempre)<input name="historico.dias_retencao" type="number" min="0" max="3650"></label>
+                <p class="dica">Sem credenciais: só disciplinas, contagens e tempos. Para apagar tudo, use a tela Histórico.</p>
               </fieldset>
               <fieldset class="cartao">
                 <legend>Espaço em disco usado pelo programa</legend>
@@ -325,9 +673,37 @@
               <legend>URLs do SIGAA</legend>
               <p class="alerta alerta-aviso">⚠️ Só altere se souber o que está fazendo. <button type="button" class="ajuda-mini" data-ajuda="avancado_urls" aria-label="Ajuda: URLs">?</button></p>
               <div id="avancado-urls" class="formulario"></div>
+              <div class="acoes acoes-compactas">
+                <button type="button" class="botao botao-secundario botao-pequeno" id="avancado-testar-urls">🔎 Testar endereços</button>
+                <span class="dica">Acessa cada endereço sem login. Endereços fora de unb.br não são acessados.</span>
+              </div>
+              <ul class="lista-diagnostico" id="avancado-urls-teste"></ul>
             </fieldset>
             <div class="acoes"><button type="submit" class="botao botao-primario">💾 Salvar configurações avançadas</button></div>
           </form>
+
+          <div class="grade-2">
+            <div class="cartao" id="perfis-cartao">
+              <h2>🎛️ Perfis</h2>
+              <p class="texto-suave">Guarde cenários prontos — ex: "Acompanhar (calmo)" e "Semana de matrícula" — com modo, desempenho, proteção, janela, alertas, notificações e disciplinas. O DRY RUN nunca muda ao aplicar um perfil.</p>
+              <ul class="lista-diagnostico" id="perfis-lista"></ul>
+              <form class="linha-form" id="form-perfil">
+                <label class="expandir">Salvar a configuração atual como<input name="nome" maxlength="60" placeholder="Nome do perfil" autocomplete="off" required></label>
+                <button type="submit" class="botao botao-secundario">💾 Salvar perfil</button>
+              </form>
+            </div>
+            <div class="cartao">
+              <h2>↩️ Versões anteriores</h2>
+              <p class="texto-suave">Cada alteração de configurações ou de disciplinas guarda a versão anterior (as 20 mais recentes de cada). Restaurar também guarda a atual — dá para desfazer.</p>
+              <div class="tabela-rolavel tabela-curta">
+                <table class="tabela">
+                  <thead><tr><th scope="col">Quando</th><th scope="col">O quê</th><th scope="col">Se restaurar</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
+                  <tbody id="versoes-lista"></tbody>
+                </table>
+              </div>
+              <p class="vazio" id="versoes-vazio">Nenhuma alteração guardada ainda.</p>
+            </div>
+          </div>
 
           <div class="grade-2">
             <div class="cartao">
@@ -353,16 +729,66 @@
 
         <!-- 🩺 DIAGNÓSTICO -->
         <section class="tela" id="tela-diagnostico" data-titulo="Diagnóstico" hidden>
-          <div class="cartao">
+          <div class="cartao" id="diag-cartao">
+            <div class="cabecalho-impressao"><strong>SIGAA Sniper — relatório de diagnóstico</strong></div>
             <p class="texto-suave">Não inclui credenciais nem tokens.</p>
             <div class="acoes acoes-compactas">
               <button type="button" class="botao botao-primario" id="diag-completo">🔍 Diagnóstico completo</button>
               <button type="button" class="botao botao-secundario" id="diag-camadas">🌐 Testar conectividade em camadas</button>
               <button type="button" class="botao botao-fantasma" id="diag-exportar" disabled>💾 Exportar relatório</button>
               <button type="button" class="botao botao-fantasma" id="diag-copiar" disabled>📋 Copiar diagnóstico</button>
+              <button type="button" class="botao botao-fantasma" id="diag-imprimir" disabled>🖨️ Imprimir / PDF</button>
             </div>
             <ul class="lista-diagnostico" id="diag-itens"></ul>
             <details id="diag-bruto-bloco" hidden><summary>Relatório em texto</summary><pre class="bloco-codigo" id="diag-bruto"></pre></details>
+          </div>
+
+          <div class="cartao" id="assist-cartao">
+            <h2>🧭 Assistente de solução de problemas</h2>
+            <p class="texto-suave">Escolha o que está acontecendo. O assistente cruza a execução atual (ou a última gravada), os erros, os alertas e a sua configuração e mostra a causa provável e o que fazer.</p>
+            <div class="grade-sintomas" id="assist-sintomas" role="group" aria-label="O que está acontecendo?"></div>
+            <div id="assist-resultado" aria-live="polite"></div>
+          </div>
+
+          <div class="grade-2">
+            <div class="cartao">
+              <div class="cartao-cabecalho">
+                <h2>🔒 Configurações de segurança</h2>
+                <button type="button" class="botao botao-fantasma botao-pequeno" id="seg-atualizar">↻ Conferir de novo</button>
+              </div>
+              <ul class="lista-diagnostico" id="seg-itens"></ul>
+            </div>
+            <div class="cartao">
+              <h2>💡 Recomendações de configuração</h2>
+              <p class="texto-suave">A partir das métricas da execução atual ou da última gravada. "Aplicar" passa pela mesma validação do formulário e vale na próxima execução.</p>
+              <ul class="lista-diagnostico" id="rec-itens"></ul>
+            </div>
+          </div>
+
+          <div class="grade-2">
+            <div class="cartao">
+              <div class="cartao-cabecalho">
+                <h2>📄 Páginas capturadas</h2>
+                <button type="button" class="botao botao-fantasma botao-pequeno" id="dumps-atualizar">↻ Atualizar</button>
+              </div>
+              <p class="texto-suave">Páginas do SIGAA guardadas quando algo não veio como esperado, já com matrícula, CPF, nome e campos de formulário mascarados (***). Aqui elas aparecem só como texto.</p>
+              <div class="tabela-rolavel">
+                <table class="tabela">
+                  <thead><tr><th scope="col">Quando</th><th scope="col">Motivo</th><th scope="col">Worker</th><th scope="col" class="num">Tamanho</th><th scope="col"><span class="visualmente-oculto">Ações</span></th></tr></thead>
+                  <tbody id="dumps-itens"></tbody>
+                </table>
+              </div>
+              <p class="vazio" id="dumps-vazio">Nenhuma página capturada — bom sinal.</p>
+            </div>
+            <div class="cartao">
+              <h2>📦 Pacote de suporte</h2>
+              <p class="texto-suave">Um arquivo .zip para pedir ajuda: versão, diagnóstico, configuração, eventos recentes e páginas capturadas — tudo com dados pessoais mascarados. Senha, CPF, data de nascimento e tokens nunca entram. Confira antes de compartilhar.</p>
+              <div class="acoes acoes-compactas">
+                <button type="button" class="botao botao-secundario" id="suporte-previa">👀 Ver o que vai no pacote</button>
+                <button type="button" class="botao botao-primario" id="suporte-baixar">📦 Baixar pacote (.zip)</button>
+              </div>
+              <ul class="lista-diagnostico" id="suporte-itens"></ul>
+            </div>
           </div>
         </section>
 
@@ -393,6 +819,14 @@
               <p class="texto-suave">Versão <span id="sobre-versao">—</span></p>
             </div>
             <div class="cartao">
+              <h2>Versão e integridade</h2>
+              <p class="texto-suave" id="sobre-hash-rotulo">Impressão digital (SHA-256) deste executável — compare com o arquivo SHA256SUMS.txt publicado junto do pacote:</p>
+              <p><code class="quebra" id="sobre-hash">—</code></p>
+              <div class="acoes acoes-compactas"><button type="button" class="botao botao-secundario" id="sobre-atualizacao">🔄 Verificar se há versão nova</button></div>
+              <p id="sobre-atualizacao-resultado" aria-live="polite"></p>
+              <label class="caixa"><input type="checkbox" id="sobre-verificar-ao-abrir"> Verificar sozinho ao abrir a Interface Web (uma consulta ao GitHub; nada é baixado)</label>
+            </div>
+            <div class="cartao">
               <h2>Atalho na Área de Trabalho</h2>
               <p>Cria um atalho para abrir o programa direto da Área de Trabalho.</p>
               <div class="acoes acoes-compactas"><button type="button" class="botao botao-secundario" id="sobre-atalho">🖥️ Criar atalho</button></div>
@@ -420,13 +854,21 @@
       <p class="alerta alerta-aviso">⚠️ O código do departamento pode mudar — o SIGAA é quem define esse número, não este programa. Se parar de funcionar, use "Como encontrar?" para verificar o valor atual.</p>
       <label>Código da disciplina (ex: FGA0211)<input name="codigo" required autocomplete="off"></label>
       <label>Turma (ex: 01)<input name="turma" required autocomplete="off"></label>
-      <label>Departamento (digite nome ou código para buscar)
-        <input name="departamento_busca" id="disc-depto-busca" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="disc-depto-lista" aria-expanded="false">
-      </label>
-      <ul class="sugestoes" id="disc-depto-lista" role="listbox" hidden></ul>
-      <p class="dica" id="disc-depto-selecionado">Nenhum departamento selecionado.</p>
-      <button type="button" class="botao botao-fantasma botao-pequeno alinhar-inicio" data-ajuda="departamento">Como encontrar?</button>
+      <div class="campo-com-botao">
+        <label class="expandir">Código do departamento (ex: 673)
+          <input name="departamento_busca" id="disc-depto-busca" autocomplete="off" inputmode="numeric" aria-describedby="disc-depto-selecionado">
+        </label>
+        <button type="button" class="botao botao-secundario" id="disc-ver-deptos">📋 Ver departamentos</button>
+      </div>
+      <p class="dica" id="disc-depto-selecionado" aria-live="polite">Digite o código ou escolha na lista.</p>
+      <button type="button" class="botao botao-fantasma botao-pequeno alinhar-inicio" data-ajuda="departamento">Como encontrar o código?</button>
       <label>Professor (opcional)<input name="professor" autocomplete="off"></label>
+      <div class="grade-2 grade-compacta">
+        <label><span class="rotulo-linha">Grupo de alternativas (opcional) <button type="button" class="ajuda-mini" data-ajuda="grupo" aria-label="Como funciona o grupo de alternativas?">?</button></span><input name="grupo" list="disc-grupos" maxlength="40" autocomplete="off" placeholder="ex: calculo1"></label>
+        <label><span class="rotulo-linha">Prioridade <button type="button" class="ajuda-mini" data-ajuda="prioridade" aria-label="Como funciona a prioridade?">?</button></span><select name="prioridade"><option value="alta">Alta — consultada primeiro</option><option value="normal" selected>Normal</option><option value="baixa">Baixa — consultada a cada 3 rodadas</option></select></label>
+      </div>
+      <datalist id="disc-grupos"></datalist>
+      <p class="dica">Mesmo grupo = alternativas: garantida uma, as outras saem da busca. Prioridade só define a ordem das consultas. Clique nos <b>?</b> para exemplos.</p>
       <div class="acoes acoes-direita">
         <button type="button" class="botao botao-secundario" id="disc-cancelar">Cancelar</button>
         <button type="submit" class="botao botao-primario">Salvar</button>
@@ -458,15 +900,77 @@
   <dialog id="dialogo-assistente" class="dialogo dialogo-grande" aria-labelledby="assistente-titulo">
     <form id="form-assistente" class="dialogo-corpo formulario" novalidate autocomplete="off">
       <p class="passos" id="assistente-passos"></p>
+      <div id="assistente-erros" class="assistente-erros" aria-live="assertive" hidden></div>
       <div id="assistente-conteudo"></div>
       <div class="acoes acoes-entre">
-        <button type="button" class="botao botao-fantasma" id="assistente-pular">Pular assistente</button>
+        <button type="button" class="botao botao-fantasma" id="assistente-pular">Configurar depois</button>
         <div class="acoes acoes-compactas">
           <button type="button" class="botao botao-secundario" id="assistente-voltar">◀ Voltar</button>
           <button type="submit" class="botao botao-primario" id="assistente-proximo">Próximo ▶</button>
         </div>
       </div>
     </form>
+  </dialog>
+
+  <!-- Lista de departamentos (desde a 6.1.0): aberta só quando a pessoa pede -->
+  <dialog id="dialogo-departamentos" class="dialogo dialogo-grande" aria-labelledby="deptos-titulo">
+    <div class="dialogo-corpo formulario">
+      <h2 id="deptos-titulo">Departamentos</h2>
+      <label>Pesquisar por nome ou código<input id="deptos-busca" type="search" autocomplete="off" placeholder="ex: gama, computação, 673"></label>
+      <p class="texto-suave" id="deptos-status" aria-live="polite"></p>
+      <ul class="lista-deptos" id="deptos-lista"></ul>
+      <div class="acoes acoes-direita"><button type="button" class="botao botao-secundario" id="deptos-fechar">Fechar</button></div>
+    </div>
+  </dialog>
+
+  <!-- Cadastro em lote (sugestão 005) -->
+  <dialog id="dialogo-lote" class="dialogo dialogo-grande" aria-labelledby="lote-titulo">
+    <form id="form-lote" class="dialogo-corpo formulario" novalidate>
+      <h2 id="lote-titulo">📋 Adicionar várias disciplinas</h2>
+      <p class="dica">Uma por linha: <code>CÓDIGO TURMA DEPARTAMENTO</code>, separados por espaço, vírgula, ponto e vírgula ou tabulação — dá para colar direto de uma planilha. Nada é salvo antes de você revisar. <button type="button" class="ajuda-mini" data-ajuda="lote" aria-label="Ajuda: cadastro em lote">?</button></p>
+      <label>Disciplinas<textarea name="texto" id="lote-texto" rows="7" spellcheck="false" autocomplete="off" placeholder="FGA0211 01 673&#10;MAT0025;02;518"></textarea></label>
+      <div class="acoes acoes-compactas">
+        <button type="button" class="botao botao-secundario" id="lote-previa">🔍 Pré-visualizar</button>
+        <span class="texto-suave" id="lote-resumo" aria-live="polite"></span>
+      </div>
+      <div class="tabela-rolavel lote-tabela" id="lote-tabela-bloco" hidden>
+        <table class="tabela">
+          <thead><tr><th scope="col">Linha</th><th scope="col">Disciplina</th><th scope="col">Situação</th><th scope="col">Detalhe</th></tr></thead>
+          <tbody id="lote-linhas"></tbody>
+        </table>
+      </div>
+      <div class="acoes acoes-direita">
+        <button type="button" class="botao botao-secundario" id="lote-cancelar">Cancelar</button>
+        <button type="submit" class="botao botao-primario" id="lote-adicionar" disabled>Adicionar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Tooltip dos gráficos (um só, reposicionado) -->
+  <div class="grafico-tooltip" id="grafico-tooltip" role="status" aria-live="off" hidden></div>
+
+  <!-- Paleta de ações (sugestão 002) -->
+  <dialog id="dialogo-paleta" class="dialogo dialogo-paleta" aria-label="Paleta de ações">
+    <div class="paleta">
+      <input type="text" id="paleta-busca" role="combobox" aria-expanded="true" aria-controls="paleta-lista" aria-autocomplete="list"
+             autocomplete="off" spellcheck="false" placeholder="Digite uma ação ou tela: iniciar, logs, adicionar disciplina…">
+      <ul id="paleta-lista" class="paleta-lista" role="listbox" aria-label="Ações disponíveis"></ul>
+      <p class="paleta-rodape texto-suave"><kbd>↑</kbd> <kbd>↓</kbd> navegar · <kbd>Enter</kbd> executar · <kbd>Esc</kbd> fechar · <kbd>?</kbd> atalhos</p>
+    </div>
+  </dialog>
+
+  <!-- Central de notificações (sugestão 088) -->
+  <dialog id="dialogo-central" class="dialogo" aria-labelledby="central-titulo">
+    <div class="dialogo-corpo">
+      <div class="cartao-cabecalho">
+        <h2 id="central-titulo">🔔 Notificações desta sessão</h2>
+        <button type="button" class="botao botao-fantasma botao-pequeno" id="central-limpar">Limpar lista</button>
+      </div>
+      <p class="dica">Avisos e alertas desde que esta página foi aberta — incluindo os que já sumiram da tela. Nada disso é salvo em disco.</p>
+      <ul class="central-lista" id="central-lista"></ul>
+      <p class="vazio" id="central-vazio">Nenhuma notificação ainda.</p>
+      <div class="acoes acoes-direita"><button type="button" class="botao botao-primario" id="central-fechar">Fechar</button></div>
+    </div>
   </dialog>
 
   <div class="notificacoes-toast" id="toasts" role="status" aria-live="polite"></div>

@@ -25,8 +25,8 @@ from tkinter import ttk
 
 from app.core.disclaimer import CONFIRMACOES, RESUMOS_CURTOS, TEXTO_COMPLETO, TITULO
 from app.gui.responsive import aplicar_geometria_responsiva
-
-URL_REPOSITORIO = "https://github.com/xGabrielCv/Auto-Matricula-SIGAA-UnB"
+from app.versao import URL_REPOSITORIO
+from app.gui.tema import cor
 
 
 class DialogoAvisoLegal(tk.Toplevel):
@@ -107,7 +107,7 @@ class DialogoAvisoLegal(tk.Toplevel):
         # ficam de fora, mesmo numa janela pequena.
         rodape = ttk.Frame(self, padding=(16, 8))
         rodape.pack(side="bottom", fill="x")
-        link = ttk.Label(rodape, text="🔗 Repositório oficial no GitHub", foreground="#0969da", cursor="hand2")
+        link = ttk.Label(rodape, text="🔗 Repositório oficial no GitHub", foreground=cor("#0969da"), cursor="hand2")
         link.pack(side="left")
         link.bind("<Button-1>", lambda _e: webbrowser.open(URL_REPOSITORIO))
         ttk.Button(rodape, text="Recusar e sair", command=self._recusar).pack(side="right")
@@ -133,7 +133,7 @@ class DialogoAvisoLegal(tk.Toplevel):
             # só o próprio checkbox alterna o estado, de propósito.
 
         ttk.Label(
-            frame_check, foreground="#666", wraplength=560, justify="left",
+            frame_check, foreground=cor("#666"), wraplength=560, justify="left",
             text="(o texto completo de cada item está disponível na íntegra do aviso acima ↑)",
         ).pack(anchor="w", pady=(4, 0))
 

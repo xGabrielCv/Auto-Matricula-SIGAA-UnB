@@ -18,6 +18,17 @@ from typing import Any, Dict
 from app.utils.paths import caminho as caminho_projeto
 
 
+# Campos estruturados aceitos no log (sugestão 053). Lista FECHADA de
+# propósito: qualquer outro nome passado pelo motor é descartado, então um
+# descuido futuro nunca grava credenciais no arquivo.
+CAMPOS_ESTRUTURADOS = (
+    "evento", "execucao_id", "codigo", "turma", "vagas", "latencia_ms", "http_status",
+    "dry_run", "motivo", "espera_seg", "departamento",
+    # Fase 5: rastreamento de tentativas de matrícula (059).
+    "tentativa_id", "etapa", "duracao_ms",
+)
+
+
 class JsonFormatter(logging.Formatter):
     """Formata cada registro de log como uma linha JSON válida (JSON Lines)."""
 
@@ -29,6 +40,12 @@ class JsonFormatter(logging.Formatter):
             "worker": worker_id,
             "message": record.getMessage(),
         }
+        campos = getattr(record, "campos", None)
+        if isinstance(campos, dict):
+            for nome in CAMPOS_ESTRUTURADOS:
+                valor = campos.get(nome)
+                if isinstance(valor, (str, int, float, bool)) and valor is not None:
+                    log_record[nome] = valor
         if record.exc_info:
             log_record["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_record, ensure_ascii=False)
@@ -65,6 +82,15 @@ def configurar_logging(
     console_formatter = logging.Formatter(
         "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
     )
+    # Com a saída redirecionada para arquivo/pipe numa codificação que não tem
+    # emoji (ex: cp1252 no Windows), cada linha com "🔍" gerava um traceback
+    # "Logging error". O caractere impossível vira um escape; o log JSON (UTF-8)
+    # continua com o texto completo.
+    try:
+        if (getattr(sys.stdout, "encoding", "") or "").lower().replace("-", "") != "utf8":
+            sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(console_formatter)
     console_handler.setLevel(nivel_console)

@@ -38,9 +38,59 @@ import re
 import time
 from collections import deque
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 MARCADOR_SESSAO = "SESSAO_INICIADA"
+
+# Evento estruturado do log (sugestão 053) → tipo usado pelo coletor.
+_TIPO_POR_EVENTO = {
+    "sessao_iniciada": "sessao", "busca": "busca", "sem_vagas": "sem_vagas", "vaga_detectada": "vaga",
+    "timeout": "timeout", "falha_rede": "falha_rede", "erro_critico": "falha_rede",
+    "matricula_sucesso": "sucesso", "dry_run_interrompido": "dry_run",
+}
+
+
+def classificar(registro: dict) -> Optional[str]:
+    """Tipo do evento: pelo campo `evento` quando existe (logs novos) ou pelo
+    texto da mensagem (logs gravados antes da sugestão 053) — assim mudar uma
+    frase no motor não quebra mais o painel, e logs antigos continuam legíveis."""
+    evento = registro.get("evento")
+    if evento:
+        return _TIPO_POR_EVENTO.get(evento, "outro")
+    msg = registro.get("message", "")
+    if MARCADOR_SESSAO in msg:
+        return "sessao"
+    if "🔍 Buscando" in msg:
+        return "busca"
+    if "📉 Sem vagas" in msg:
+        return "sem_vagas"
+    if "🚨 VAGA DETECTADA" in msg:
+        return "vaga"
+    if "Timeout" in msg:
+        return "timeout"
+    if "Falha de rede" in msg or "Erro crítico inesperado" in msg:
+        return "falha_rede"
+    if "SUCESSO ABSOLUTO" in msg or "DRY RUN SUCESSO" in msg:
+        return "sucesso"
+    if "DRY RUN" in msg:
+        return "dry_run"
+    return None
+
+
+def _alvo(registro: dict, padrao: Optional[str] = None) -> Optional[str]:
+    if registro.get("codigo") and registro.get("turma"):
+        return f"{registro['codigo']}-{registro['turma']}"
+    if padrao is None:
+        return None
+    m = re.search(padrao, registro.get("message", ""))
+    return m.group(1) if m else None
+
+
+def _latencia(registro: dict) -> Optional[int]:
+    if isinstance(registro.get("latencia_ms"), (int, float)):
+        return int(registro["latencia_ms"])
+    m = re.search(r"\((\d+)ms\)", registro.get("message", ""))
+    return int(m.group(1)) if m else None
 
 
 class LogTailer:
@@ -62,6 +112,17 @@ class LogTailer:
         self.filepath = filepath
         self.inode = -1
         self.posicao = 0
+        self.buffer = b""
+
+    def pular_para_o_fim(self) -> None:
+        """Ignora o que já está no arquivo (execuções anteriores) — a leitura
+        passa a devolver só as linhas escritas daqui em diante."""
+        try:
+            stat = os.stat(self.filepath)
+        except FileNotFoundError:
+            return
+        self.inode = stat.st_ino
+        self.posicao = stat.st_size
         self.buffer = b""
 
     def read_new_lines(self):
@@ -92,6 +153,32 @@ class LogTailer:
         # rstrip(b"\r"): no Windows o log é gravado em modo texto ("\r\n"); a
         # versão antiga lia em modo texto e já recebia só "\n" — mantém igual.
         return [linha.rstrip(b"\r").decode("utf-8", errors="replace") + "\n" for linha in completas]
+
+
+def ler_ultimos_registros(caminho: str, limite: int = 500, bloco: int = 1024 * 1024) -> List[dict]:
+    """Os últimos `limite` registros do log JSON Lines, lendo só o final do
+    arquivo (o log pode ter dezenas de MB). Linhas inválidas são ignoradas."""
+    import json
+    try:
+        with open(caminho, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            tamanho = f.tell()
+            f.seek(max(0, tamanho - bloco))
+            dados = f.read()
+    except OSError:
+        return []
+    linhas = dados.split(b"\n")
+    if tamanho > bloco:
+        linhas = linhas[1:]  # a primeira linha do bloco pode ter vindo cortada
+    registros = []
+    for linha in linhas[-(limite * 2):]:
+        try:
+            registro = json.loads(linha.rstrip(b"\r").decode("utf-8", errors="replace"))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(registro, dict):
+            registros.append(registro)
+    return registros[-limite:]
 
 
 class ColetorMetricas:
@@ -143,7 +230,8 @@ class ColetorMetricas:
         nivel = registro.get("level", "INFO")
         log_time_str = registro.get("timestamp", "")
 
-        if MARCADOR_SESSAO in msg:
+        tipo = classificar(registro)
+        if tipo == "sessao":
             self._resetar_sessao()
             return
 
@@ -171,20 +259,20 @@ class ColetorMetricas:
             }
 
         # 1. ERROS E ALERTAS
-        if nivel in ("WARNING", "ERROR", "CRITICAL") and "VAGA DETECTADA" not in msg and "DRY RUN" not in msg:
+        if nivel in ("WARNING", "ERROR", "CRITICAL") and tipo not in ("vaga", "sucesso", "dry_run"):
             self.stats["erros_totais"] += 1
             if ao_vivo:
                 self.health_err_window.append(ts_fila)
             if worker in self.stats["workers"]:
                 self.stats["workers"][worker]["erros_count"] += 1
-            if "Timeout" not in msg:
+            if tipo != "timeout":
                 self.stats["log_erros"].appendleft(f"[{log_time_str}] {worker}: {msg}")
             elif worker in self.stats["workers"]:
                 self.stats["workers"][worker].update({"ultima_acao": "Timeout / Rede lenta", "timestamp": event_ts})
 
         # 2. CONTAGEM DE REQUISIÇÕES (RPS) — inclui falhas de rede/erro crítico (correção #2)
-        eh_requisicao = ("Sem vagas" in msg) or ("VAGA DETECTADA" in msg) or ("Timeout" in msg)
-        eh_falha_rede = ("Falha de rede" in msg) or ("Erro crítico inesperado" in msg)
+        eh_requisicao = tipo in ("sem_vagas", "vaga", "timeout")
+        eh_falha_rede = tipo == "falha_rede"
         if eh_requisicao or eh_falha_rede:
             self.stats["total_reqs"] += 1
             if eh_falha_rede:
@@ -194,12 +282,12 @@ class ColetorMetricas:
                 self.health_req_window.append(ts_fila)
 
         # 3. BUSCAS (BPS)
-        if "🔍 Buscando" in msg:
+        if tipo == "busca":
             self.stats["total_buscas"] += 1
             if ao_vivo:
                 self.bps_window.append(ts_fila)
-            alvo = re.search(r"Buscando ([A-Z0-9-]+)", msg)
-            alvo_str = alvo.group(1) if alvo else "..."
+            alvo = _alvo(registro, r"Buscando ([A-Z0-9-]+)")
+            alvo_str = alvo or "..."
             if worker in self.stats["workers"]:
                 self.stats["workers"][worker].update({"ultima_acao": f"Buscando {alvo_str}", "timestamp": event_ts})
                 self.stats["workers"][worker]["buscas_feitas"] += 1
@@ -207,11 +295,7 @@ class ColetorMetricas:
                 self._ultima_busca_por_worker[worker] = alvo_str
 
         # 4. LATÊNCIA — agora captura "Sem vagas" E "VAGA DETECTADA" (correção #1)
-        lat_val = None
-        if "📉 Sem vagas" in msg or "🚨 VAGA DETECTADA" in msg:
-            m = re.search(r"\((\d+)ms\)", msg)
-            if m:
-                lat_val = int(m.group(1))
+        lat_val = _latencia(registro) if tipo in ("sem_vagas", "vaga") else None
 
         if lat_val is not None:
             self.stats["soma_latencia"] += lat_val
@@ -222,26 +306,29 @@ class ColetorMetricas:
                 self.stats["latencias_recentes"].append(lat_val)
             if worker in self.stats["workers"]:
                 cor = "verde" if lat_val <= 230 else "amarelo" if lat_val < 400 else "vermelho"
-                if "📉 Sem vagas" in msg:
+                if tipo == "sem_vagas":
                     self.stats["workers"][worker].update({"ultima_acao": "Sem vagas", "timestamp": event_ts})
                 self.stats["workers"][worker].update({"latencia": lat_val, "cor_lat": cor})
 
-            if "📉 Sem vagas" in msg:
-                disciplina = self._ultima_busca_por_worker.get(worker)
+            if tipo == "sem_vagas":
+                disciplina = _alvo(registro) or self._ultima_busca_por_worker.get(worker)
                 if disciplina:
                     self._registrar_historico_vaga(disciplina, log_time_str, 0)
 
         # 5. VAGAS E SUCESSO
-        if "🚨 VAGA DETECTADA" in msg:
+        if tipo == "vaga":
             self.stats["vagas_encontradas"] += 1
-            alvo = re.search(r"-> ([A-Z0-9-]+)", msg)
-            alvo_str = alvo.group(1) if alvo else "Disciplina"
-            vagas_qtd = re.search(r"\((\d+) vaga", msg)
-            self._registrar_historico_vaga(alvo_str, log_time_str, int(vagas_qtd.group(1)) if vagas_qtd else 1)
+            alvo_str = _alvo(registro, r"-> ([A-Z0-9-]+)") or "Disciplina"
+            if isinstance(registro.get("vagas"), int):
+                qtd = registro["vagas"]
+            else:
+                m_qtd = re.search(r"\((\d+) vaga", msg)
+                qtd = int(m_qtd.group(1)) if m_qtd else 1
+            self._registrar_historico_vaga(alvo_str, log_time_str, qtd)
             self.stats["registro_vagas"].appendleft(f"[{log_time_str}] {worker} VAGA DETECTADA: {alvo_str}")
             if worker in self.stats["workers"]:
                 self.stats["workers"][worker].update({"ultima_acao": "🚨 ACHOU VAGA!", "timestamp": event_ts})
-        elif "SUCESSO ABSOLUTO" in msg or "DRY RUN SUCESSO" in msg:
+        elif tipo == "sucesso":
             self.stats["registro_vagas"].appendleft(f"[{log_time_str}] {worker} MATRICULADO COM SUCESSO!")
             if worker in self.stats["workers"]:
                 self.stats["workers"][worker].update({"ultima_acao": "🎉 MATRICULADO!", "timestamp": event_ts})
@@ -260,9 +347,14 @@ class ColetorMetricas:
         while janela and janela[0] < agora - segundos:
             janela.popleft()
 
-    def snapshot(self) -> Dict:
+    def snapshot(self, execucao_ativa: bool = True) -> Dict:
         """Retorna todas as métricas prontas para exibição, já marcando quais
-        não têm dados suficientes (`disponivel: False`) em vez de mostrar zero."""
+        não têm dados suficientes (`disponivel: False`) em vez de mostrar zero.
+
+        Sem execução ativa (`execucao_ativa=False`), os dados são de uma execução
+        ENCERRADA: o tempo fica congelado na duração dela e não há alerta de
+        worker "sem atividade" — antes o tempo seguia contando a partir do início
+        do log e a tela acusava workers parados de uma execução que nem existia."""
         agora = time.time()
         self._aparar_janela(self.rps_window, 5, agora)
         self._aparar_janela(self.bps_window, 5, agora)
@@ -272,8 +364,10 @@ class ColetorMetricas:
         s = self.stats
         tem_log = s["start_time_log"] is not None
 
-        rps_atual = len(self.rps_window) / 5.0
-        bps_atual = len(self.bps_window) / 5.0
+        # Sem execução ativa não existe tráfego "agora": zero fixo, em vez de um valor
+        # que vai caindo sozinho nos segundos seguintes à parada.
+        rps_atual = len(self.rps_window) / 5.0 if execucao_ativa else 0.0
+        bps_atual = len(self.bps_window) / 5.0 if execucao_ativa else 0.0
 
         avg_rps = avg_bps = None
         if tem_log and s["last_time_log"] > s["start_time_log"]:
@@ -286,7 +380,7 @@ class ColetorMetricas:
         min_lat = s["min_latencia"] if s["min_latencia"] != float("inf") else None
         max_lat = s["max_latencia"] if s["qtd_latencia"] > 0 else None
 
-        saude = self._calcular_saude()
+        saude = self._calcular_saude() if execucao_ativa else {"status": "aguardando_trafego", "taxa_erro": None}
 
         return {
             "tem_dados": tem_log,
@@ -304,13 +398,14 @@ class ColetorMetricas:
             "total_buscas": s["total_buscas"],
             "vagas_encontradas": s["vagas_encontradas"],
             "erros_totais": s["erros_totais"],
-            "uptime_bot_seg": (agora - s["start_time_log"]) if tem_log else None,
+            "uptime_bot_seg": (((agora if execucao_ativa else (s["last_time_log"] or s["start_time_log"])) - s["start_time_log"])
+                               if tem_log else None),
             "uptime_dashboard_seg": agora - self.dashboard_start,
             "workers": dict(s["workers"]),
             "registro_vagas": list(s["registro_vagas"]),
             "log_erros": list(s["log_erros"]),
             "historico_vagas": {k: list(v) for k, v in s["historico_vagas"].items()},
-            "workers_com_alerta": self._detectar_workers_parados(s["workers"], agora),
+            "workers_com_alerta": self._detectar_workers_parados(s["workers"], agora) if execucao_ativa else [],
         }
 
     LIMIAR_WORKER_PARADO_SEG = 30  # seção 38: acima disso, um worker que não fez nada é anômalo
@@ -338,6 +433,17 @@ class ColetorMetricas:
         else:
             status = "estavel"
         return {"status": status, "taxa_erro": taxa_erro}
+
+
+def criar_tailer_da_sessao(caminho_log: str, carregar_ultima: bool) -> "LogTailer":
+    """Leitor do log de auditoria para os painéis da interface aberta agora.
+    Por padrão começa do FIM (só o que acontecer nesta sessão); com
+    `carregar_ultima` lê também o que já existe (dados de execuções anteriores,
+    que os painéis mostram como recuperados)."""
+    tailer = LogTailer(caminho_log)
+    if not carregar_ultima:
+        tailer.pular_para_o_fim()
+    return tailer
 
 
 def formatar_uptime(segundos: Optional[float]) -> str:
