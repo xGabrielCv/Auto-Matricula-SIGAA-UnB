@@ -63,9 +63,12 @@ class SigaaSimulado:
         self.falhas_rede_cas = 0      # quantas requisições ao CAS falham por rede antes de funcionar
         self.falhar_busca_a_cada = 0  # >0: a cada N buscas, uma responde HTTP 500 (sessão expirada)
         self.sobrecarga_nas_primeiras = 0  # as N primeiras buscas respondem HTTP 503 (SIGAA sobrecarregado)
+        self.timeouts_nas_primeiras = 0  # as N primeiras buscas estouram ReadTimeout
+        self.sobrecarga_selecao_nas_primeiras = 0  # os N primeiros POSTs de seleção respondem HTTP 503
         self.logins_simultaneos_max = 0
         self._logins_agora = 0
         self._buscas = 0
+        self._selecoes = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         dados = parse_qs(request.content.decode("utf-8")) if request.method == "POST" else {}
@@ -87,11 +90,16 @@ class SigaaSimulado:
                 return httpx.Response(200, text=PAGINA_BUSCA)
             if "form:buscar" in dados:
                 self._buscas += 1
+                if self._buscas <= self.timeouts_nas_primeiras:
+                    raise httpx.ReadTimeout("sigaa lento simulado", request=request)
                 if self._buscas <= self.sobrecarga_nas_primeiras:
                     return httpx.Response(503, text="<html>Service Unavailable</html>")
                 if self.falhar_busca_a_cada and self._buscas % self.falhar_busca_a_cada == 0:
                     return httpx.Response(500, text="<html>erro interno</html>")
                 return httpx.Response(200, text=pagina_resultado(self.vagas))
+            self._selecoes += 1
+            if self._selecoes <= self.sobrecarga_selecao_nas_primeiras:
+                return httpx.Response(503, text="<html>Service Unavailable</html>")
             return httpx.Response(200, text=PAGINA_CONFIRMACAO)  # POST de seleção de turma
         if caminho == ACTION_CONFIRMACAO:
             return httpx.Response(200, text=f"<html><div class='info'>{self.resposta_final}</div></html>")
@@ -384,3 +392,66 @@ def test_parser_com_pre_checagem_e_equivalente_ao_original():
                 assert resultado(worker.parse_hot_path) == resultado(_parse_original_v40), (codigo, turma)
     finally:
         asyncio.run(worker.fechar())
+
+
+def test_timeout_transitorio_preserva_sessao_sem_relogar(sigaa):
+    """Sob sobrecarga transitória do SIGAA, até 2 timeouts seguidos renovam o socket sem relogar no CAS."""
+    sigaa.timeouts_nas_primeiras = 2
+    motor, eventos = montar(dry_run=True)
+    rodar(motor)
+    posts_cas = [r for r in sigaa.requisicoes if r[0] == "POST" and "sso-server" in r[1]]
+    assert len(posts_cas) == 1, "timeout transitório não deve forçar relogin no CAS"
+    assert ("matricula_sucesso", {"codigo": "FGA0211", "turma": "01", "dry_run": True}) in eventos
+    assert motor.snapshot()["contadores"].get("reconexoes_suaves", 0) >= 2
+
+
+def test_selecao_recupera_de_503_sem_perder_vaga(sigaa):
+    """POST de seleção é idempotente e recupera rapidamente de 503 sem reenviar confirmação real."""
+    sigaa.sobrecarga_selecao_nas_primeiras = 2
+    motor, eventos = montar(dry_run=True)
+    rodar(motor)
+    assert ("matricula_sucesso", {"codigo": "FGA0211", "turma": "01", "dry_run": True}) in eventos
+    assert sigaa.posts_confirmacao() == []
+    assert len(sigaa.posts_selecao()) == 3
+
+
+def test_viewstate_atualizado_continuamente_e_rotacao_por_worker(sigaa):
+    """ViewState é atualizado a cada busca 200 e múltiplos workers escalonam alvos na mesma prioridade."""
+    motor = engine.MotorMatricula(
+        credenciais=credenciais(),
+        disciplinas=[["FGA0211", "01", 673, "", "normal"], ["MAT0025", "01", 673, "", "normal"], ["CIC0004", "01", 673, "", "alta"]],
+        num_workers=2, intervalo_busca=0.01, timeout_req=5, dry_run=True,
+    )
+    ordem_w0 = [k for k, _ in motor.alvos_em_ordem(0)]
+    ordem_w1 = [k for k, _ in motor.alvos_em_ordem(1)]
+    assert ordem_w0 == ["CIC0004-01", "FGA0211-01", "MAT0025-01"]
+    assert ordem_w1 == ["CIC0004-01", "MAT0025-01", "FGA0211-01"]
+
+    # Verifica atualização contínua de ViewState durante buscas sem vaga
+    sigaa.vagas = 0
+    m2, _ = montar(modo="monitoramento")
+    rodar_ate(m2, lambda m: m.estado_alvos["FGA0211-01"]["buscas"] >= 3)
+    buscas_vs = [r[2].get("javax.faces.ViewState", [None])[0]
+                 for r in sigaa.requisicoes if r[0] == "POST" and "form:buscar" in r[2]]
+    assert "VS-RESULTADO" in buscas_vs[1:], f"ViewState não foi renovado nas buscas seguintes: {buscas_vs}"
+
+
+def test_pre_aquecimento_antes_do_horario_agendado(sigaa, monkeypatch):
+    """Agendamento longo pré-aquece login e departamento antes do horário alvo e libera imediatamente na abertura."""
+    from datetime import datetime, timedelta
+
+    monkeypatch.setattr(engine.MotorMatricula, "PRE_AQUECER_MIN_ESPERA_SEG", 0.5)
+    alvo = datetime.now() + timedelta(seconds=1.6)
+    eventos = []
+    motor = engine.MotorMatricula(
+        credenciais=credenciais(),
+        disciplinas=[["FGA0211", "01", 673]],
+        num_workers=1, intervalo_busca=0.01, timeout_req=5, dry_run=True,
+        agendar_inicio=alvo.strftime("%d/%m/%Y %H:%M:%S"),
+        pre_aquecer_seg=2.0,
+        logger=logging.getLogger("teste_prewarm"),
+        on_evento=lambda t, d: eventos.append((t, d)),
+    )
+    rodar(motor, timeout=15)
+    assert ("matricula_sucesso", {"codigo": "FGA0211", "turma": "01", "dry_run": True}) in eventos
+    assert motor._portao_inicio is not None and motor._portao_inicio.is_set()

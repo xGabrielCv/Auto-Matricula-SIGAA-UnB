@@ -121,3 +121,30 @@ def test_configuracao_e_carga_estimada_com_teto(raiz_temporaria):
     carga = estimar_carga(20, 0.3, 1, limite=10)
     assert carga["req_por_seg"] == 10 and carga["limitada"] and "teto" in carga["texto"]
     assert not estimar_carga(4, 1.5, 1, limite=10)["limitada"]
+
+
+def test_disjuntor_acorda_workers_imediatamente_e_respeita_retry_after():
+    from app.core.protecao import parse_retry_after
+
+    assert parse_retry_after("7") == 7.0
+    assert parse_retry_after("999", max_seg=60.0) == 60.0
+    assert parse_retry_after("invalido") is None
+
+    d = Disjuntor(limiar_falhas=1, espera_inicial_seg=0.05, espera_max_seg=10.0)
+    d.registrar_falha(retry_after=2.0)
+    assert d.estado == "aberto" and d.segundos_para_reabrir() >= 1.5
+
+    async def cenario():
+        d2 = Disjuntor(limiar_falhas=1, espera_inicial_seg=0.05, espera_max_seg=10.0)
+        d2.registrar_falha()
+        parado = lambda: False  # noqa: E731
+        await d2.liberar(1, parado)  # vira sonda
+        esperando = asyncio.create_task(d2.liberar(2, parado))
+        await asyncio.sleep(0.02)
+        assert not esperando.done()
+        t0 = time.monotonic()
+        d2.registrar_sucesso()
+        await asyncio.wait_for(esperando, timeout=0.15)
+        return time.monotonic() - t0
+
+    assert asyncio.run(cenario()) < 0.12

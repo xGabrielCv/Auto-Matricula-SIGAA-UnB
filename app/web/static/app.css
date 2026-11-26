@@ -50,7 +50,7 @@
 html, body { margin: 0; }
 html { font-size: calc(100% * var(--escala-fonte, 1)); }
 body {
-  font-family: var(--fonte); font-size: calc(15px * var(--escala-fonte, 1)); line-height: 1.5;
+  font-family: var(--fonte); font-size: calc(16px * var(--escala-fonte, 1)); line-height: 1.5;
   background: var(--fundo); color: var(--texto);
   -webkit-font-smoothing: antialiased;
 }
@@ -103,7 +103,7 @@ code { font-family: var(--fonte-mono); font-size: .88em; background: var(--super
 .topo-titulo { font-size: 1.3rem; margin: 0; flex: 1; }
 .topo .botao-menu { display: none; }
 .rotulo-linha { display: inline-flex; align-items: center; gap: 4px; }
-main { padding: 24px 28px 48px; outline: none; max-width: 1400px; width: 100%; }
+main { padding: 24px 28px 48px; outline: none; max-width: 1680px; width: 100%; }
 #faixas { padding: 0 28px; }
 #faixas:not(:empty) { padding-top: 16px; }
 
@@ -277,7 +277,7 @@ details summary { cursor: pointer; font-weight: 600; margin-top: 14px; }
 .dialogo-corpo h2 { margin: 0; font-size: 1.15rem; }
 .dialogo-conteudo { white-space: pre-wrap; }
 .dialogo-conteudo ul { white-space: normal; margin: 8px 0 0; padding-left: 20px; }
-.aviso-texto { white-space: pre-wrap; font-size: .9rem; background: var(--superficie-2); border: 1px solid var(--borda); border-radius: var(--raio-pequeno); padding: 14px 16px; max-height: 38vh; overflow: auto; }
+.aviso-texto { white-space: pre-wrap; font-size: .9rem; background: var(--superficie-2); border: 1px solid var(--borda); border-radius: var(--raio-pequeno); padding: 14px 16px; max-height: 38vh; overflow: auto; flex-shrink: 0; /* no celular o corpo do diálogo rola; sem isto o aviso encolhia a uma linha */ }
 .aviso-confirmacoes { border: 1px solid var(--borda); border-radius: var(--raio-pequeno); padding: 10px 14px 14px; margin: 0; }
 .aviso-confirmacoes legend { font-weight: 700; padding: 0 6px; }
 .item-confirmacao { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-bottom: 1px dashed var(--borda); }
@@ -623,4 +623,24 @@ figure.grafico figcaption p { font-size: .86rem; margin-bottom: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ── Telas estreitas (celular, 320–560 px): mesmo visual, distribuição que cabe ── */
+.tela a, .alerta a, .toast { overflow-wrap: anywhere; }
+.tela p, .tela li, .tela dd, .tela td, .dialogo p { overflow-wrap: break-word; }  /* caminhos e URLs longos */
+.toast > * { min-width: 0; }
+@media (max-width: 560px) {
+  .topo { gap: 8px; }
+  /* o título encolhe com reticências; antes empurrava o estado da execução para fora da tela */
+  .topo-titulo { min-width: 0; flex: 1 1 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status-execucao { min-width: 0; padding: 6px 10px; }
+  .faixa { flex-wrap: wrap; }
+  .faixa > div:first-child { flex: 1 1 100%; }
+  .faixa .espaco { display: none; }
+  .botao { white-space: normal; max-width: 100%; text-align: center; }
+}
+@media (max-width: 400px) {
+  .topo { padding: 8px 10px; gap: 6px; }
+  .topo .botao-menu, .topo .sino, .topo .botao-paleta { padding-inline: 8px; }
+  .status-execucao .status-texto { max-width: 24vw; }
 }

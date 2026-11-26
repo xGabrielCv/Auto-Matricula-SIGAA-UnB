@@ -818,6 +818,11 @@
               <p><a id="sobre-repo" href="#" target="_blank" rel="noopener noreferrer">🔗 —</a></p>
               <p class="texto-suave">Versão <span id="sobre-versao">—</span></p>
             </div>
+            <div class="cartao" id="sobre-aviso">
+              <h2>Aviso legal</h2>
+              <p id="sobre-aviso-situacao" class="texto-suave">—</p>
+              <div class="acoes acoes-compactas"><button type="button" class="botao botao-secundario" id="sobre-aviso-ler">📄 Ler o aviso legal</button></div>
+            </div>
             <div class="cartao">
               <h2>Versão e integridade</h2>
               <p class="texto-suave" id="sobre-hash-rotulo">Impressão digital (SHA-256) deste executável — compare com o arquivo SHA256SUMS.txt publicado junto do pacote:</p>
@@ -880,7 +885,7 @@
   <dialog id="dialogo-aviso" class="dialogo dialogo-grande" aria-labelledby="aviso-titulo">
     <form id="form-aviso" class="dialogo-corpo" novalidate>
       <h2 id="aviso-titulo">⚠️ Aviso Legal</h2>
-      <p class="texto-suave">Antes de continuar, leia o aviso completo abaixo:</p>
+      <p class="texto-suave" id="aviso-instrucao">Antes de continuar, leia o aviso completo abaixo:</p>
       <div class="aviso-texto" id="aviso-texto" tabindex="0"></div>
       <fieldset class="aviso-confirmacoes">
         <legend>Confirme todos os pontos para continuar</legend>
@@ -891,6 +896,7 @@
         <div class="acoes acoes-compactas">
           <button type="button" class="botao botao-secundario" id="aviso-recusar">Recusar e sair</button>
           <button type="submit" class="botao botao-primario" id="aviso-aceitar" disabled>Aceitar e continuar</button>
+          <button type="button" class="botao botao-primario" id="aviso-fechar" hidden>Fechar</button>
         </div>
       </div>
     </form>

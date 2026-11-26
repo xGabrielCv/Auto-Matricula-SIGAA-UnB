@@ -70,6 +70,18 @@ CREATE INDEX IF NOT EXISTS idx_series_exec ON series_minuto(execucao_id);
 DIAS_SEMANA = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"]
 
 
+def _fim_do_resumo(resumo: Dict[str, Any]) -> Optional[float]:
+    """Instante (epoch) em que a execução terminou, a partir do CONTEÚDO do resumo (não do mtime do arquivo, que cópias e réplicas renovam)."""
+    for campo in ("fim", "inicio"):
+        valor = resumo.get(campo)
+        if valor:
+            try:
+                return datetime.strptime(valor, "%Y-%m-%d %H:%M:%S").timestamp()
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def caminho_banco() -> str:
     return os.path.join(pasta_data(), ARQUIVO)
 
@@ -138,10 +150,16 @@ def _agregar_por_minuto(pontos: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]
     return saida
 
 
-def registrar_execucao(resumo: Dict[str, Any], telemetria: Optional[Dict[str, Any]] = None) -> bool:
-    """Grava uma execução encerrada. Idempotente (regravar o mesmo id substitui)."""
+def registrar_execucao(resumo: Dict[str, Any], telemetria: Optional[Dict[str, Any]] = None, dias: Optional[int] = None) -> bool:
+    """Grava uma execução encerrada. Idempotente (regravar o mesmo id substitui). Com `dias`, nada VENCIDO entra: uma execução que terminou antes
+    do corte não é gravada e, numa execução longa, só os pontos dentro da janela são gravados (o início antigo não ressuscita dados vencidos)."""
     if not resumo or not resumo.get("execucao_id"):
         return False
+    limite = time.time() - dias * 86400 if dias and dias > 0 else None
+    if limite is not None:
+        terminou = _fim_do_resumo(resumo)
+        if terminou is not None and terminou < limite:
+            return False
     tel = telemetria or {}
     t = resumo.get("totais", {})
     lat = resumo.get("latencia_ms", {})
@@ -161,25 +179,32 @@ def registrar_execucao(resumo: Dict[str, Any], telemetria: Optional[Dict[str, An
              t.get("matriculadas", 0), t.get("simuladas", 0), t.get("bloqueadas", 0), t.get("erros", 0),
              lat.get("media"), lat.get("min"), lat.get("max"), disciplinas, json.dumps(resumo, ensure_ascii=False)),
         )
-        leituras = [(eid, chave, float(ts), int(v)) for chave, serie in (tel.get("vagas_series") or {}).items() for ts, v in serie]
+        leituras = [(eid, chave, float(ts), int(v)) for chave, serie in (tel.get("vagas_series") or {}).items() for ts, v in serie
+                    if limite is None or float(ts) >= limite]
         con.executemany("INSERT INTO leituras_vagas VALUES (?,?,?,?)", leituras)
-        minutos = _agregar_por_minuto(tel.get("pontos") or [])
+        minutos = [m for m in _agregar_por_minuto(tel.get("pontos") or []) if limite is None or m["t"] >= limite]
         con.executemany("INSERT INTO series_minuto VALUES (?,?,?,?,?,?)",
                         [(eid, m["t"], m["req"], m["p50"], m["p95"], json.dumps(m["erros"])) for m in minutos])
     return True
 
 
-def aplicar_retencao(dias: int) -> int:
-    """Apaga execuções mais antigas que `dias` (0 = nunca apaga). Devolve quantas saíram."""
+def aplicar_retencao(dias: int, agora: Optional[float] = None) -> int:
+    """Preserva a escolha local (0 = sem corte) e usa a data de encerramento.
+    Podam-se também os pontos vencidos de execuções longas, preservando o resumo recente.
+    """
     if not dias or dias <= 0:
         return 0
-    limite = time.time() - dias * 86400
+    limite = (agora if agora is not None else time.time()) - dias * 86400
     with _lock, _banco() as con:
-        ids = [r["id"] for r in con.execute("SELECT id FROM execucoes WHERE inicio < ?", (limite,))]
+        ids = [r["id"] for r in con.execute("SELECT id FROM execucoes WHERE COALESCE(fim, inicio) < ?", (limite,))]
         for eid in ids:
             for tabela in ("leituras_vagas", "series_minuto", "execucoes"):
                 coluna = "id" if tabela == "execucoes" else "execucao_id"
                 con.execute(f"DELETE FROM {tabela} WHERE {coluna} = ?", (eid,))  # noqa: S608 — nomes fixos
+        con.execute("DELETE FROM leituras_vagas WHERE t < ?", (limite,))
+        con.execute("DELETE FROM series_minuto WHERE t < ?", (limite,))
+        for tabela in ("leituras_vagas", "series_minuto"):
+            con.execute(f"DELETE FROM {tabela} WHERE execucao_id NOT IN (SELECT id FROM execucoes)")  # noqa: S608 — nomes fixos
     return len(ids)
 
 
@@ -207,11 +232,13 @@ def importar_relatorios_antigos(forcar: bool = False) -> int:
     with _banco() as con:
         existentes = {r["id"] for r in con.execute("SELECT id FROM execucoes")}
     novos = 0
+    from app.core.config import carregar_settings
+    dias = carregar_settings()["historico"]["dias_retencao"]
     for resumo in listar_relatorios():
         if resumo.get("execucao_id") not in existentes:
             try:
-                registrar_execucao(resumo)
-                novos += 1
+                if registrar_execucao(resumo, dias=dias):
+                    novos += 1
             except (KeyError, ValueError, sqlite3.Error):
                 continue
     return novos

@@ -165,6 +165,7 @@
     if (!conexao.reconectando) return; // outra chamada já reconectou
     try {
       const r = await fetch("/api/estado", { cache: "no-store", credentials: "same-origin", headers: { "X-Requested-With": "SIGAA-Sniper" } });
+      if (r.status >= 502 && r.status <= 504) throw new Error("proxy sem o serviço");
       if (r.status === 401) { conexao.reconectando = false; $("#faixa-conexao").hidden = true; acessoNegado(); return; }
       conexaoRestabelecida();
     } catch (e) {
@@ -190,9 +191,13 @@
       perdeuConexao();
       throw new ErroHttp(0, { erro: "Sem conexão com o SIGAA Sniper no momento — tentando reconectar." });
     }
+    let dados = {}, temJson = false;
+    try { dados = await resp.json(); temJson = true; } catch (e) { /* resposta sem JSON */ }
+    if (!temJson && resp.status >= 502 && resp.status <= 504) {
+      perdeuConexao();
+      throw new ErroHttp(0, { erro: "Sem resposta do SIGAA Sniper no momento — tentando reconectar." });
+    }
     if (conexao.reconectando) conexaoRestabelecida();
-    let dados = {};
-    try { dados = await resp.json(); } catch (e) { /* resposta sem JSON */ }
     if (resp.status === 401) { acessoNegado(); throw new ErroHttp(401, dados); }
     if (resp.status === 403 && dados.aviso_pendente) { exigirAviso(); throw new ErroHttp(403, dados); }
     if (!resp.ok) throw new ErroHttp(resp.status, dados);
@@ -274,11 +279,19 @@
 
   // ── Aviso legal (obrigatório em toda execução) ───────────────────────
   let avisoCarregando = false;
-  async function exigirAviso() {
+  function modoLeituraAviso(leitura) {
+    $(".aviso-confirmacoes").hidden = leitura;
+    $("#aviso-recusar").hidden = leitura;
+    $("#aviso-aceitar").hidden = leitura;
+    $("#aviso-fechar").hidden = !leitura;
+    $("#aviso-instrucao").textContent = leitura ? "Texto do aviso legal em vigor nesta execução:" : "Antes de continuar, leia o aviso completo abaixo:";
+  }
+  async function exigirAviso(somenteLeitura = false) {
     if (avisoCarregando || $("#dialogo-aviso").open) return;
     avisoCarregando = true;
     try {
       const aviso = await api("GET", "/api/aviso-legal");
+      modoLeituraAviso(somenteLeitura);
       $("#aviso-titulo").textContent = `⚠️ ${aviso.titulo}`;
       // Mesmo texto, só sem as quebras de linha "duras" do meio dos parágrafos
       // (o original foi escrito para 80 colunas de terminal). Listas e
@@ -296,7 +309,7 @@
       });
       atualizarBotaoAviso();
       const dlg = $("#dialogo-aviso");
-      dlg.oncancel = (ev) => ev.preventDefault(); // Esc não fecha: é preciso aceitar ou recusar
+      dlg.oncancel = (ev) => { if (!somenteLeitura) ev.preventDefault(); }; // Esc não fecha: é preciso aceitar ou recusar
       if (!dlg.open) dlg.showModal();
       $("#aviso-texto").focus();
     } catch (e) { mostrarErro(e); } finally { avisoCarregando = false; }
@@ -312,6 +325,8 @@
     const r = await acao("POST", "/api/aviso-legal/aceitar", { confirmacoes }, { botao: $("#aviso-aceitar") });
     if (r && r.ok) { $("#dialogo-aviso").close(); iniciarAplicacao(); }
   });
+  $("#aviso-fechar").addEventListener("click", () => { $("#dialogo-aviso").close(); modoLeituraAviso(false); });
+  $("#sobre-aviso-ler").addEventListener("click", () => exigirAviso(true));
   $("#aviso-recusar").addEventListener("click", async () => {
     const r = await acao("POST", "/api/aviso-legal/recusar");
     bloquear("Termos não aceitos", (r && r.mensagem) || "Você optou por não aceitar os termos.", "A Interface Web foi encerrada. Você já pode fechar esta aba.");
@@ -388,8 +403,14 @@
   });
 
   // ── Estado geral / cabeçalho ─────────────────────────────────────────
+  let ultimoEstadoEm = 0;
   async function atualizarEstado() {
     if (estadoApp.encerrado) return;
+    // Aba em segundo plano com o motor parado: consulta a cada 10 s (com o motor rodando, os
+    // alertas de vaga continuam a cada 2 s). Ao voltar para a aba, atualiza na hora.
+    const motorRodando = !!(estadoApp.estado && estadoApp.estado.execucao && estadoApp.estado.execucao.em_execucao);
+    if (document.hidden && !motorRodando && Date.now() - ultimoEstadoEm < 10000) return;
+    ultimoEstadoEm = Date.now();
     try {
       const est = await api("GET", "/api/estado");
       estadoApp.estado = est;
@@ -1967,6 +1988,8 @@
     let s; try { s = await api("GET", "/api/sobre"); } catch (e) { mostrarErro(e); return; }
     $("#sobre-repo").href = s.repositorio; $("#sobre-repo").textContent = `🔗 ${s.repositorio}`;
     $("#sobre-versao").textContent = s.versao;
+    const est = estadoApp.estado || {};
+    $("#sobre-aviso-situacao").textContent = est.aviso_aceito ? "Aceito nesta execução pelo formulário do aviso." : "Ainda não aceito nesta execução.";
     $("#sobre-hash").textContent = s.sha256 || "rodando pelo código-fonte (sem executável para verificar)";
     $("#sobre-verificar-ao-abrir").checked = s.verificar_ao_abrir;
     guiaManual = s.guia_manual;
@@ -2406,5 +2429,6 @@
     if (est.aviso_aceito) iniciarAplicacao();
     else exigirAviso();
   }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && aplicacaoIniciada) atualizarEstado(); });
   boot();
 })();

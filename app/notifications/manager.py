@@ -102,6 +102,9 @@ class GerenciadorNotificacoes:
         como uma task separada e retorna na hora."""
         if not self.eventos_ativos.get(tipo, False):
             return
+        if len(self._tarefas_em_voo) >= 64:
+            self.log.warning('Fila de notificações cheia (64); evento não agendado. Monitoramento continua.')
+            return
 
         chave = self._chave_para(tipo, dados)
         if tipo not in self.EVENTOS_PRIORITARIOS and not self._pode_notificar(chave):
@@ -156,4 +159,4 @@ class GerenciadorNotificacoes:
         try:
             await corrotina
         except Exception as e:
-            self.log.warning(f"⚠️ Falha ao enviar notificação via {nome_canal} (monitoramento continua): {repr(e)}")
+            self.log.warning(f"⚠️ Falha ao enviar notificação via {nome_canal} (monitoramento continua): {type(e).__name__}")

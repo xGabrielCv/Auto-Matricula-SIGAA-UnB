@@ -45,8 +45,10 @@ Ver docs/ARQUITETURA.md para o diff detalhado "antes/depois" desta migração.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import os
+import random
 import re
 import time
 import uuid
@@ -59,7 +61,7 @@ from bs4 import BeautifulSoup
 
 from app.core.alertas import AvaliadorAlertas, texto_resumo_periodico
 from app.core.credentials import CredenciaisSigaa
-from app.core.protecao import STATUS_SOBRECARGA, Disjuntor, LimitadorTaxa
+from app.core.protecao import STATUS_SOBRECARGA, Disjuntor, LimitadorTaxa, parse_retry_after
 from app.core.regras import classificar_resposta_confirmacao, dentro_da_janela, descrever_janela, inspecionar_turma
 from app.core.relogio import descrever_offset, medir_offset_relogio
 from app.core.suporte import redigir_html
@@ -85,12 +87,36 @@ URLS_PADRAO: Dict[str, str] = {
 }
 
 RE_VIEWSTATE = re.compile(r'name="javax\.faces\.ViewState"[^>]*value="([^"]+)"')
+RE_DIGITOS = re.compile(r"(\d+)")
+RE_SELECIONAR_TURMA = re.compile(r"[Ss]elecionar turma")
+RE_ID_TURMA = re.compile(r"'idTurma'\s*:\s*'(\d+)'")
+RE_LINK_ID = re.compile(r"'(form:selecionarTurma[^']*)':")
+RE_TABELA_EXTRA_ABRE = re.compile(r"<table\b[^>]*\bid\s*=\s*['\"]lista-turmas-extra['\"][^>]*>", re.I)
+RE_TAG_TABELA = re.compile(r"<(/?)table\b", re.I)
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
     "Connection": "keep-alive",
 }
+
+
+def _recortar_tabela_turmas(html: str) -> Optional[str]:
+    """Recorta apenas o bloco `<table id="lista-turmas-extra">...</table>` para evitar parsear a página inteira."""
+    m = RE_TABELA_EXTRA_ABRE.search(html)
+    if not m:
+        return None
+    profundidade = 1
+    for tag in RE_TAG_TABELA.finditer(html, m.end()):
+        if tag.group(1):
+            profundidade -= 1
+            if profundidade == 0:
+                fim = html.find(">", tag.end())
+                return html[m.start():(fim + 1 if fim >= 0 else len(html))]
+        else:
+            profundidade += 1
+    return html[m.start():]
 
 EventoCallback = Callable[[str, dict], None]
 
@@ -126,18 +152,18 @@ class SigaaWorker:
     #     departamentos continuam sendo buscadas no ritmo normal.
     ESPERA_FALHA_BASE_SEG = 1.0
     ESPERA_FALHA_MAX_SEG = 30.0
+    MAX_RECONEXOES_SUAVES = 2
 
     def __init__(self, worker_id: int, motor: "MotorMatricula"):
         self.id = worker_id
         self.motor = motor
         self.urls = motor.urls  # atalho — mesmo dict, só pra não escrever self.motor.urls toda hora
-        self.client = httpx.AsyncClient(
-            headers=BROWSER_HEADERS, timeout=motor.timeout_req, follow_redirects=True, **motor.opcoes_cliente
-        )
+        self.client = self._criar_cliente()
         self.payloads_base: Dict[int, Dict[str, str]] = {}
         self.log_prefix = f"[W{self.id}]"
         self.rotulo_log = f"W{self.id}"
         self.falhas_seguidas = 0
+        self._falhas_transporte_seguidas = 0
         # "rede" = não houve resposta (vale tentar de novo); "recusado" = o SIGAA
         # respondeu mas o login não entrou (provável credencial errada — repetir
         # só arriscaria bloquear a conta).
@@ -153,6 +179,21 @@ class SigaaWorker:
         # Supervisor (057): batimento a cada volta do laço; tentativa em curso (059).
         self.ultimo_batimento = time.time()
         self.tentativa: Optional[Dict[str, Any]] = None
+
+    def _criar_cliente(self, cookies: Optional[httpx.Cookies] = None) -> httpx.AsyncClient:
+        t = float(self.motor.timeout_req)
+        timeout = httpx.Timeout(connect=min(5.0, t), read=t, write=min(5.0, t), pool=min(5.0, t))
+        limits = httpx.Limits(max_connections=12, max_keepalive_connections=6, keepalive_expiry=90.0)
+        kwargs: Dict[str, Any] = {
+            "headers": BROWSER_HEADERS,
+            "timeout": timeout,
+            "limits": limits,
+            "follow_redirects": True,
+            **self.motor.opcoes_cliente,
+        }
+        if cookies is not None:
+            kwargs["cookies"] = cookies
+        return httpx.AsyncClient(**kwargs)
 
     def mudar_estado(self, estado: str, alvo: Optional[str] = None) -> None:
         self.estado = estado
@@ -175,14 +216,16 @@ class SigaaWorker:
 
     def _registrar_sucesso(self) -> None:
         self.falhas_seguidas = 0
+        self._falhas_transporte_seguidas = 0
 
     async def esperar_apos_falha(self, motivo: str) -> None:
         """Espera crescente após falhas seguidas de login, interrompível pelo botão Parar."""
         self.falhas_seguidas += 1
-        espera = self._espera_para(self.falhas_seguidas)
+        espera_base = self._espera_para(self.falhas_seguidas)
+        espera = espera_base * random.uniform(0.85, 1.15) if self.motor.num_workers > 1 else espera_base
         self.mudar_estado("aguardando")
         self.log(f"⏸️ Aguardando {espera:.0f}s antes de tentar de novo ({motivo}; falha {self.falhas_seguidas} seguida).",
-                 evento="espera_falha", espera_seg=espera, motivo=motivo)
+                 evento="espera_falha", espera_seg=round(espera, 2), motivo=motivo)
         try:
             await asyncio.wait_for(self.motor.stop_event.wait(), timeout=espera)
         except asyncio.TimeoutError:
@@ -205,16 +248,30 @@ class SigaaWorker:
     async def fechar(self):
         await self.client.aclose()
 
+    async def reconectar_preservando_sessao(self) -> None:
+        """Renova o pool TCP/HTTP travado preservando cookies (`JSESSIONID`) e `payloads_base`, evitando fila no CAS."""
+        jar = httpx.Cookies()
+        try:
+            for c in self.client.cookies.jar:
+                jar.jar.set_cookie(copy.copy(c))
+        except Exception:
+            pass
+        try:
+            await self.client.aclose()
+        except Exception:
+            pass
+        self.client = self._criar_cliente(cookies=jar)
+        self.contadores["reconexoes_suaves"] += 1
+
     async def resetar_cliente(self):
         """Mata o cliente HTTP travado e recria do zero para reviver workers zumbis."""
         try:
             await self.client.aclose()
         except Exception:
             pass
-        self.client = httpx.AsyncClient(
-            headers=BROWSER_HEADERS, timeout=self.motor.timeout_req, follow_redirects=True, **self.motor.opcoes_cliente
-        )
+        self.client = self._criar_cliente()
         self.payloads_base.clear()
+        self._falhas_transporte_seguidas = 0
 
     def log(self, msg: str, level=logging.INFO, **campos):
         """`campos` viram colunas estruturadas no log JSON (sugestão 053). Só
@@ -366,17 +423,21 @@ class SigaaWorker:
             return None
         if codigo_alvo.lower() not in html_minusculo:
             return None
+        if "lista-turmas-extra" not in html_minusculo:
+            return None
 
-        soup = BeautifulSoup(html, "html.parser")
-        tabela = soup.find(id="lista-turmas-extra")
+        trecho_tabela = _recortar_tabela_turmas(html)
+        soup_tabela = BeautifulSoup(trecho_tabela if trecho_tabela is not None else html, "html.parser")
+        tabela = soup_tabela.find(id="lista-turmas-extra")
         if not tabela:
             return None
 
+        codigo_upper = codigo_alvo.upper()
         disciplina_ativa = False
         for tr in tabela.find_all("tr"):
             classes = " ".join(tr.get("class", []))
             if "disciplina" in classes:
-                disciplina_ativa = codigo_alvo.upper() in tr.get_text().upper()
+                disciplina_ativa = codigo_upper in tr.get_text().upper()
                 continue
             if not disciplina_ativa or ("linhaPar" not in classes and "linhaImpar" not in classes):
                 continue
@@ -385,30 +446,37 @@ class SigaaWorker:
             if len(tds) < 8:
                 continue
 
-            m_turma = re.search(r"(\d+)", tds[1].get_text(strip=True))
+            m_turma = RE_DIGITOS.search(tds[1].get_text(strip=True))
             if (m_turma.group(1) if m_turma else "") != turma_alvo:
                 continue
 
-            m_vagas = re.search(r"(\d+)", tds[7].get_text(strip=True))
+            m_vagas = RE_DIGITOS.search(tds[7].get_text(strip=True))
             vagas = int(m_vagas.group(1)) if m_vagas else 0
             if vagas <= 0:
                 return None
 
-            link = tr.find("a", title=re.compile(r"[Ss]elecionar turma"))
+            link = tr.find("a", title=RE_SELECIONAR_TURMA)
             if not link:
                 continue
 
             onclick = link.get("onclick", "")
-            m_idturma = re.search(r"'idTurma'\s*:\s*'(\d+)'", onclick)
-            m_linkid = re.search(r"'(form:selecionarTurma[^']*)':", onclick)
+            m_idturma = RE_ID_TURMA.search(onclick)
+            m_linkid = RE_LINK_ID.search(onclick)
             if not m_idturma or not m_linkid:
                 continue
 
-            tag_vs = soup.find("input", attrs={"name": "javax.faces.ViewState"})
-            if not tag_vs:
-                return None
+            m_vs = RE_VIEWSTATE.search(html)
+            if m_vs:
+                viewstate = m_vs.group(1)
+            else:
+                if "javax.faces.viewstate" not in html_minusculo:
+                    return None
+                tag_vs = BeautifulSoup(html, "html.parser").find("input", attrs={"name": "javax.faces.ViewState"})
+                if not tag_vs:
+                    return None
+                viewstate = tag_vs["value"]
 
-            return {"idTurma": m_idturma.group(1), "link_id": m_linkid.group(1), "viewstate": tag_vs["value"], "vagas": vagas}
+            return {"idTurma": m_idturma.group(1), "link_id": m_linkid.group(1), "viewstate": viewstate, "vagas": vagas}
         return None
 
     # --- 3. CICLO DE BUSCA ---
@@ -420,7 +488,7 @@ class SigaaWorker:
         while alvos and not self.motor.stop_event.is_set():
             ciclo += 1
             self.ultimo_batimento = time.time()
-            for chave, (codigo, turma, id_depto) in self.motor.alvos_em_ordem():
+            for chave, (codigo, turma, id_depto) in self.motor.alvos_em_ordem(self.id):
                 self.ultimo_batimento = time.time()
                 if self.motor.stop_event.is_set():
                     break
@@ -474,22 +542,27 @@ class SigaaWorker:
                         # para o disjuntor e segue; a sessão provavelmente continua válida.
                         self.contadores["sobrecargas"] += 1
                         telemetria.registrar_erro("sobrecarga", f"HTTP {resp.status_code}")
-                        self.motor.disjuntor.registrar_falha()
+                        retry_after = parse_retry_after(resp.headers.get("Retry-After"), self.motor.disjuntor.espera_max)
+                        self.motor.disjuntor.registrar_falha(retry_after=retry_after)
                         self.log(f"🧯 SIGAA sobrecarregado (HTTP {resp.status_code}). Reduzindo o ritmo...", logging.WARNING,
                                  evento="sigaa_sobrecarregado", http_status=resp.status_code)
                         continue
                     self.motor.disjuntor.registrar_sucesso()
 
-                    if resp.status_code != 200 or "autenticacao" in resp.text:
+                    if resp.status_code != 200 or "autenticacao" in resp.text or "autenticacao" in str(resp.url).lower():
                         self.contadores["sessoes_expiradas"] += 1
                         telemetria.registrar_erro("sessao", f"HTTP {resp.status_code}")
                         self.log("⚠️ Sessão corrompida. Reiniciando...", logging.WARNING,
                                  evento="sessao_expirada", http_status=resp.status_code)
+                        self._falhas_transporte_seguidas = 0
                         await self.relogar()
                         self.payloads_base.clear()
                         continue
 
                     self._registrar_sucesso()
+                    m_vs_atual = RE_VIEWSTATE.search(resp.text)
+                    if m_vs_atual and id_depto in self.payloads_base:
+                        self.payloads_base[id_depto]["javax.faces.ViewState"] = m_vs_atual.group(1)
                     dados_vaga = self.parse_hot_path(resp.text, codigo, turma)
                     if (not dados_vaga and "javax.faces.ViewState" not in resp.text
                             and RE_MANUTENCAO.search(resp.text[:20000])):
@@ -580,19 +653,45 @@ class SigaaWorker:
                     self.motor.telemetria.registrar_requisicao(None)
                     self.motor.telemetria.registrar_erro("timeout", f"W{self.id}")
                     self.mudar_estado("reiniciando")
-                    self.log("⏳ Timeout (Socket Preso). Ressuscitando worker...", logging.WARNING, evento="timeout")
-                    await self.resetar_cliente()
-                    await self.relogar()
+                    self._falhas_transporte_seguidas += 1
+                    if self._falhas_transporte_seguidas <= self.MAX_RECONEXOES_SUAVES and self.payloads_base:
+                        self.log(
+                            f"♻️ Timeout (Socket Preso). Renovando conexão preservando sessão "
+                            f"({self._falhas_transporte_seguidas}/{self.MAX_RECONEXOES_SUAVES})...",
+                            logging.WARNING, evento="timeout",
+                        )
+                        await self.reconectar_preservando_sessao()
+                        try:
+                            await asyncio.wait_for(self.motor.stop_event.wait(), timeout=random.uniform(0.15, 0.35))
+                        except asyncio.TimeoutError:
+                            pass
+                    else:
+                        self.log("⏳ Timeout persistente. Ressuscitando worker e renovando sessão...", logging.WARNING, evento="timeout")
+                        await self.resetar_cliente()
+                        await self.relogar()
                 except httpx.RequestError as e:
                     self.motor.disjuntor.registrar_falha()
                     self.contadores["falhas_rede"] += 1
                     self.motor.telemetria.registrar_requisicao(None)
                     self.motor.telemetria.registrar_erro("rede", type(e).__name__)
                     self.mudar_estado("reiniciando")
-                    self.log(f"🔌 Falha de rede ({type(e).__name__}). Ressuscitando worker...", logging.WARNING,
-                             evento="falha_rede", motivo=type(e).__name__)
-                    await self.resetar_cliente()
-                    await self.relogar()
+                    self._falhas_transporte_seguidas += 1
+                    if self._falhas_transporte_seguidas <= self.MAX_RECONEXOES_SUAVES and self.payloads_base:
+                        self.log(
+                            f"♻️ Falha de rede ({type(e).__name__}). Renovando conexão preservando sessão "
+                            f"({self._falhas_transporte_seguidas}/{self.MAX_RECONEXOES_SUAVES})...",
+                            logging.WARNING, evento="falha_rede", motivo=type(e).__name__,
+                        )
+                        await self.reconectar_preservando_sessao()
+                        try:
+                            await asyncio.wait_for(self.motor.stop_event.wait(), timeout=random.uniform(0.15, 0.35))
+                        except asyncio.TimeoutError:
+                            pass
+                    else:
+                        self.log(f"🔌 Falha de rede persistente ({type(e).__name__}). Ressuscitando worker...", logging.WARNING,
+                                 evento="falha_rede", motivo=type(e).__name__)
+                        await self.resetar_cliente()
+                        await self.relogar()
                 except Exception as e:
                     self.contadores["erros_criticos"] += 1
                     self.motor.telemetria.registrar_requisicao(None)
@@ -633,7 +732,39 @@ class SigaaWorker:
         payload_selecao.update({dados_vaga["link_id"]: dados_vaga["link_id"], "idTurma": dados_vaga["idTurma"], "javax.faces.ViewState": dados_vaga["viewstate"]})
         payload_selecao.pop("form:buscar", None)
 
-        resp_sel = await self.client.post(self.urls["matricula_extra"], data=payload_selecao)
+        # Seleção de turma apenas abre a tela de confirmação (idempotente): sob sobrecarga
+        # transitória do SIGAA (429/502/503/504 ou timeout), tenta rapidamente mais 2 vezes
+        # sem perder a sessão. O POST final de confirmação NUNCA é reenviado às cegas.
+        resp_sel = None
+        esperas_sel = (0.15, 0.35)
+        for tentativa_sel in range(len(esperas_sel) + 1):
+            try:
+                resp_sel = await asyncio.wait_for(
+                    self.client.post(self.urls["matricula_extra"], data=payload_selecao),
+                    timeout=self.motor.timeout_req + 2,
+                )
+            except (httpx.TimeoutException, asyncio.TimeoutError, httpx.RequestError) as e:
+                if tentativa_sel < len(esperas_sel) and not self.motor.stop_event.is_set():
+                    atraso = esperas_sel[tentativa_sel] * random.uniform(0.8, 1.2)
+                    self.log(
+                        f"♻️ Falha transitória na seleção ({type(e).__name__}); tentando novamente em {atraso:.2f}s...",
+                        logging.WARNING, codigo=codigo, turma=turma,
+                    )
+                    await self.reconectar_preservando_sessao()
+                    await asyncio.sleep(atraso)
+                    continue
+                self.log(f"❌ Seleção falhou por erro de rede/timeout: {type(e).__name__}", logging.ERROR,
+                         evento="confirmacao_nao_detectada", codigo=codigo, turma=turma)
+                return "FALHA"
+            if resp_sel.status_code in STATUS_SOBRECARGA and tentativa_sel < len(esperas_sel) and not self.motor.stop_event.is_set():
+                atraso = esperas_sel[tentativa_sel] * random.uniform(0.8, 1.2)
+                self.log(
+                    f"♻️ SIGAA retornou HTTP {resp_sel.status_code} na seleção; tentando novamente em {atraso:.2f}s...",
+                    logging.WARNING, http_status=resp_sel.status_code, codigo=codigo, turma=turma,
+                )
+                await asyncio.sleep(atraso)
+                continue
+            break
         self._etapa("selecao_enviada")
 
         if "btnConfirmar" not in resp_sel.text and "confirmaSenha" not in resp_sel.text:
@@ -769,6 +900,8 @@ class MotorMatricula:
     várias vezes na mesma execução do programa.
     """
 
+    PRE_AQUECER_MIN_ESPERA_SEG = 12.0
+
     def __init__(
         self,
         credenciais: CredenciaisSigaa,
@@ -793,6 +926,7 @@ class MotorMatricula:
         supervisor_seg: Optional[float] = None,
         transporte: Optional[Any] = None,
         demo: bool = False,
+        pre_aquecer_seg: float = 35.0,
     ):
         self.credenciais = credenciais
         self.num_workers = num_workers
@@ -867,6 +1001,8 @@ class MotorMatricula:
         # (transporte local) e nada é gravado no histórico nem nos relatórios.
         self.demo = demo
         self.opcoes_cliente: Dict[str, Any] = {"transport": transporte} if transporte is not None else {}
+        self.pre_aquecer_seg = float(pre_aquecer_seg or 0.0)
+        self._portao_inicio: Optional[asyncio.Event] = None
 
     def emitir(self, tipo: str, dados: dict) -> None:
         """Notifica quem estiver ouvindo (GUI/notificações). Nunca deixa uma falha do
@@ -878,6 +1014,8 @@ class MotorMatricula:
 
     def parar(self) -> None:
         self.stop_event.set()
+        if self._portao_inicio is not None:
+            self._portao_inicio.set()
 
     # ── Observabilidade (Fase 2) ──────────────────────────────────────────
 
@@ -928,9 +1066,21 @@ class MotorMatricula:
     def prioridade_de(self, chave: str) -> str:
         return self.meta_alvos.get(chave, {}).get("prioridade", "normal")
 
-    def alvos_em_ordem(self) -> List:
-        ordem = {"alta": 0, "normal": 1, "baixa": 2}
-        return sorted(list(self.alvos_ativos.items()), key=lambda item: ordem.get(self.prioridade_de(item[0]), 1))
+    def alvos_em_ordem(self, worker_id: int = 0) -> List:
+        """Ordena por prioridade (alta → normal → baixa) e escalona o ponto de partida por worker
+        dentro de cada faixa, evitando que todos os workers consultem a mesma turma ao mesmo tempo."""
+        faixas: Dict[str, List] = {"alta": [], "normal": [], "baixa": []}
+        for item in list(self.alvos_ativos.items()):
+            prio = self.prioridade_de(item[0])
+            faixas.get(prio, faixas["normal"]).append(item)
+        resultado: List = []
+        for prio in ("alta", "normal", "baixa"):
+            grupo = faixas[prio]
+            if len(grupo) > 1 and worker_id:
+                desloc = worker_id % len(grupo)
+                grupo = grupo[desloc:] + grupo[:desloc]
+            resultado.extend(grupo)
+        return resultado
 
     def dispensar_grupo(self, chave_garantida: str) -> List[str]:
         """Sugestão 033: garantida uma turma do grupo, as alternativas saem da busca."""
@@ -1260,6 +1410,11 @@ class MotorMatricula:
         except asyncio.CancelledError:
             self.telemetria.amostrar()
 
+    def _iniciar_workers(self) -> None:
+        for i in range(self.num_workers):
+            self._tarefas_workers[i] = asyncio.create_task(
+                self._start_worker(i, i * (self.intervalo_busca / max(1, self.num_workers))))
+
     async def _aguardar_agendamento(self):
         if not self.agendar_inicio:
             return
@@ -1286,13 +1441,36 @@ class MotorMatricula:
             self.fase = "agendado"
             self.agendado_para = self.agendar_inicio
             self.log.info(f"⏳ Agendamento ativado! Aguardando até {self.agendar_inicio}.", extra={"worker_id": "MAIN"})
+            usar_pre_aquecimento = self.pre_aquecer_seg > 0 and espera > self.PRE_AQUECER_MIN_ESPERA_SEG
+            pre_aquecido = False
             while espera > 0 and not self.stop_event.is_set():
+                if usar_pre_aquecimento and not pre_aquecido and espera <= self.pre_aquecer_seg:
+                    pre_aquecido = True
+                    self._portao_inicio = asyncio.Event()
+                    self.fase = "logando"
+                    self.log.info(
+                        f"🔥 Pré-aquecendo sessões e departamentos ({int(espera)}s antes da abertura)...",
+                        extra={"worker_id": "MAIN"},
+                    )
+                    self._iniciar_workers()
                 if espera <= 10 or (espera % 60 < 1):
                     self.log.info(f"⏳ Faltam {int(espera)} segundos.", extra={"worker_id": "MAIN"})
-                await asyncio.sleep(min(1.0, espera))
+                if pre_aquecido and espera <= 0.05:
+                    break
+                pausa = min(0.2 if espera <= 2.0 else 1.0, max(0.01, espera - (0.05 if pre_aquecido else 0.0)))
+                try:
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=pausa)
+                except asyncio.TimeoutError:
+                    pass
                 espera = (alvo - datetime.now()).total_seconds()
+            if self._portao_inicio is not None:
+                self._portao_inicio.set()
             if not self.stop_event.is_set():
-                self.log.info("🚀 Horário atingido! Disparando o esquadrão...", extra={"worker_id": "MAIN"})
+                msg_disparo = (
+                    "🚀 Horário atingido! Liberando esquadrão pré-aquecido..."
+                    if pre_aquecido else "🚀 Horário atingido! Disparando o esquadrão..."
+                )
+                self.log.info(msg_disparo, extra={"worker_id": "MAIN"})
 
     async def _start_worker(self, worker_id: int, atraso_inicial: float):
         worker = SigaaWorker(worker_id, self)
@@ -1309,8 +1487,24 @@ class MotorMatricula:
                 logado = await worker.realizar_login()
             if logado:
                 worker._registrar_sucesso()
+                if self._portao_inicio is not None and not self._portao_inicio.is_set():
+                    deptos = list(dict.fromkeys(d[2] for d in self.alvos_ativos.values()))
+                    for id_depto in deptos:
+                        if self.stop_event.is_set() or self._portao_inicio.is_set():
+                            break
+                        if id_depto not in worker.payloads_base:
+                            await worker.teleportar_departamento(id_depto)
+                    worker.mudar_estado("aguardando")
+                    while not self._portao_inicio.is_set() and not self.stop_event.is_set():
+                        try:
+                            await asyncio.wait_for(self._portao_inicio.wait(), timeout=0.25)
+                        except asyncio.TimeoutError:
+                            pass
+                    if self.stop_event.is_set():
+                        return
                 self.log.info(f"[W{worker_id}] Em posição. Offset ({atraso_inicial:.2f}s)...", extra={"worker_id": "MAIN"})
-                await asyncio.sleep(atraso_inicial)
+                if atraso_inicial > 0:
+                    await asyncio.sleep(atraso_inicial)
                 if self.fase == "logando":
                     self.fase = "monitorando"
                 await worker.rodar_ciclo()
@@ -1364,11 +1558,9 @@ class MotorMatricula:
             if self.stop_event.is_set():
                 self.motivo_fim = self.motivo_forcado or "interrompida"
                 return
-            self.fase = "logando"
-
-            for i in range(self.num_workers):
-                self._tarefas_workers[i] = asyncio.create_task(
-                    self._start_worker(i, i * (self.intervalo_busca / max(1, self.num_workers))))
+            if not self._tarefas_workers:
+                self.fase = "logando"
+                self._iniciar_workers()
             sem_workers = False
             while self.alvos_ativos and not self.stop_event.is_set():
                 await asyncio.sleep(1)
@@ -1453,7 +1645,8 @@ class MotorMatricula:
             salvar_relatorio(self.resumo)
             if self.cfg_historico.get("ativo"):
                 from app.core.historico import aplicar_retencao, registrar_execucao
-                registrar_execucao(self.resumo, self.telemetria.snapshot())
-                aplicar_retencao(int(self.cfg_historico.get("dias_retencao") or 0))
+                dias = int(self.cfg_historico.get("dias_retencao") or 0)
+                registrar_execucao(self.resumo, self.telemetria.snapshot(), dias=dias)
+                aplicar_retencao(dias)
         except Exception as e:
             self.log.warning(f"Não foi possível gerar o resumo da execução ({type(e).__name__}).", extra={"worker_id": "MAIN"})

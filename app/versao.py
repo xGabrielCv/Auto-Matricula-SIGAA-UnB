@@ -9,7 +9,7 @@ tools/build_exe.bat) — tests/test_utilitarios.py garante que os dois batem.
 from __future__ import annotations
 
 NOME_APP = "SIGAA Sniper"
-VERSAO_APP = "6.1.0"
+VERSAO_APP = "6.2.0"
 URL_REPOSITORIO = "https://github.com/xGabrielCv/Auto-Matricula-SIGAA-UnB"
 
 

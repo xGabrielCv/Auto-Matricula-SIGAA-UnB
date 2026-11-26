@@ -105,3 +105,17 @@ def test_retencao_apagar_e_importar_relatorios(raiz_temporaria):
     assert historico.importar_relatorios_antigos(forcar=True) == 1
     assert historico.importar_relatorios_antigos(forcar=True) == 0  # já está no banco
     assert historico.listar_execucoes()[0]["id"] == "do-relatorio"
+
+
+def test_retencao_usa_fim_e_nao_restaura_relatorio_vencido(raiz_temporaria):
+    agora = time.time()
+    antigo = datetime.fromtimestamp(agora - 210 * 86400).replace(microsecond=0)
+    recente = datetime.fromtimestamp(agora - 86400).replace(microsecond=0)
+    longa = _resumo("execucao-longa", antigo)
+    longa["fim"] = recente.strftime("%Y-%m-%d %H:%M:%S")
+    historico.registrar_execucao(longa, {"vagas_series": {"MAT0001": [(agora - 210 * 86400, 0), (agora - 86400, 1)]}})
+    salvar_relatorio(_resumo("relatorio-vencido", antigo))
+    assert historico.importar_relatorios_antigos(forcar=True) == 0
+    assert historico.aplicar_retencao(180, agora=agora) == 0
+    assert [e["id"] for e in historico.listar_execucoes()] == ["execucao-longa"]
+    assert len(json.loads(historico.exportar_leituras_vagas("json"))) == 1
